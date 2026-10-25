@@ -34,6 +34,7 @@ import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.ScaleAndRotateTransformation
+import androidx.media3.effect.SingleColorLut
 import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextOverlay
 import androidx.media3.exoplayer.ExoPlayer
@@ -44,6 +45,9 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
 import androidx.media3.ui.PlayerView
+import com.sowz.aestudio.core.CubeLutData
+import com.sowz.aestudio.core.CubeLutParser
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import kotlin.math.abs
@@ -62,6 +66,7 @@ class EditorActivity : Activity() {
         const val REQUEST_SAVE_PROJECT = 2103
         const val REQUEST_OPEN_PROJECT = 2104
         const val REQUEST_ADD_CLIPS = 2105
+        const val REQUEST_IMPORT_LUT = 2106
         const val SCALE_MAX = 1000
         const val MIN_CLIP_MS = 500L
     }
@@ -82,6 +87,9 @@ class EditorActivity : Activity() {
     private var contrastValue = 0f
     private var rotationDegrees = 0
     private var overlayText = ""
+    private var selectedCubeLut: CubeLutData? = null
+    private var selectedCubeLutUri: Uri? = null
+    private var lutLoadToken = 0
     private var exportClipCount = 1
     private var draggingScrubber = false
 
@@ -98,6 +106,7 @@ class EditorActivity : Activity() {
     private lateinit var brightnessSeek: SeekBar
     private lateinit var contrastSeek: SeekBar
     private lateinit var effectSummary: TextView
+    private lateinit var lutSummary: TextView
     private lateinit var rotationSummary: TextView
     private val rotationButtons = mutableMapOf<Int, TextView>()
     private lateinit var textOverlaySummary: TextView
@@ -380,6 +389,24 @@ class EditorActivity : Activity() {
         }, top = 9)
         add(content, effectsPanel, bottom = 13)
 
+        val lutPanel = panel()
+        add(lutPanel, label("CC / 3D LUT"))
+        add(lutPanel, body("Import a standard .cube colour-correction LUT. It is applied to the preview and rendered MP4; this is separate from After Effects .ffx presets.", 12f, muted), top = 5)
+        lutSummary = body("No .cube CC LUT loaded", 13f, white, true)
+        add(lutPanel, lutSummary, top = 9)
+        add(lutPanel, button("Import CC LUT (.cube)") { pickCubeLut() }, top = 10)
+        add(lutPanel, button("Remove CC LUT", secondary = true) {
+            lutLoadToken++
+            selectedCubeLut = null
+            selectedCubeLutUri = null
+            refreshCubeLutSummary()
+            player?.setVideoEffects(buildVideoEffects())
+            status.text = "CC LUT removed."
+            status.setTextColor(muted)
+        }, top = 8)
+        refreshCubeLutSummary()
+        add(content, lutPanel, bottom = 13)
+
         val transformPanel = panel()
         add(transformPanel, label("Transform"))
         add(transformPanel, body("Rotate the source before rendering. Preview and export use the same transform.", 12f, muted), top = 5)
@@ -540,6 +567,7 @@ class EditorActivity : Activity() {
             REQUEST_SAVE_PROJECT -> saveProject(data?.data ?: return)
             REQUEST_OPEN_PROJECT -> loadProject(data?.data ?: return)
             REQUEST_ADD_CLIPS -> addAdditionalClips(data)
+            REQUEST_IMPORT_LUT -> loadCubeLut(data?.data ?: return, data.flags)
         }
     }
 
@@ -582,6 +610,8 @@ class EditorActivity : Activity() {
                 .put("contrast", contrastValue.toDouble())
                 .put("rotationDegrees", rotationDegrees)
                 .put("textOverlay", overlayText)
+                .put("cubeLutUri", selectedCubeLutUri?.toString())
+                .put("cubeLutTitle", selectedCubeLut?.title)
                 .put("additionalClipUris", org.json.JSONArray().apply {
                     additionalClipUris.forEach { put(it.toString()) }
                 })
@@ -636,6 +666,15 @@ class EditorActivity : Activity() {
             contrastValue = document.optDouble("contrast", 0.0).toFloat().coerceIn(-1f, 1f)
             rotationDegrees = document.optInt("rotationDegrees", 0).let { if (it in setOf(0, 90, 180, 270)) it else 0 }
             overlayText = document.optString("textOverlay", "").take(120)
+            selectedCubeLut = null
+            selectedCubeLutUri = null
+            lutLoadToken++
+            val cubeUriText = document.optString("cubeLutUri", "")
+            if (cubeUriText.isNotBlank()) {
+                loadCubeLut(Uri.parse(cubeUriText), 0, showStatus = false)
+            } else {
+                refreshCubeLutSummary()
+            }
             brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
             contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
             updateColorValues()
@@ -757,6 +796,9 @@ class EditorActivity : Activity() {
         if (rotationDegrees != 0) {
             effects.add(ScaleAndRotateTransformation.Builder().setRotationDegrees(rotationDegrees.toFloat()).build())
         }
+        selectedCubeLut?.let { lut ->
+            effects.add(SingleColorLut.createFromCube(lut.cube))
+        }
         if (overlayText.isNotBlank()) {
             val styledText = SpannableString(overlayText).apply {
                 setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -771,6 +813,89 @@ class EditorActivity : Activity() {
             effects.add(OverlayEffect(listOf(TextOverlay.createStaticTextOverlay(styledText, settings))))
         }
         return effects
+    }
+
+    private fun pickCubeLut() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_IMPORT_LUT)
+    }
+
+    private fun loadCubeLut(uri: Uri, flags: Int = 0, showStatus: Boolean = true) {
+        val name = queryDisplayName(uri)
+        if (!name.endsWith(".cube", ignoreCase = true)) {
+            status.text = "Choose a .cube 3D LUT file. An .ffx preset is a different format."
+            status.setTextColor(accent)
+            toast("Only standard .cube CC LUT files are supported by this importer.")
+            return
+        }
+        if ((flags and Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0) {
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri, flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {
+                // Some document providers provide temporary grants only.
+            }
+        }
+        val requestToken = ++lutLoadToken
+        if (showStatus) {
+            status.text = "Reading CC LUT: $name…"
+            status.setTextColor(accent)
+        }
+        Thread {
+            val result = try {
+                val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    var total = 0
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        require(total <= 12 * 1024 * 1024) {
+                            "The .cube file exceeds the 12 MB safety limit."
+                        }
+                        output.write(buffer, 0, count)
+                    }
+                    output.toByteArray()
+                } ?: error("Could not read the selected .cube file.")
+                CubeLutParser.parse(name, bytes)
+            } catch (error: Exception) {
+                error
+            }
+            handler.post {
+                if (requestToken != lutLoadToken) return@post
+                if (result is CubeLutData) {
+                    selectedCubeLut = result
+                    selectedCubeLutUri = uri
+                    refreshCubeLutSummary()
+                    player?.setVideoEffects(buildVideoEffects())
+                    status.text = "CC LUT applied: ${result.title} · ${result.size}³"
+                    status.setTextColor(green)
+                    toast("CC LUT loaded and applied to preview/export.")
+                } else {
+                    val error = result as? Exception
+                    status.text = "Could not apply CC LUT: ${error?.message ?: "invalid file"}"
+                    status.setTextColor(accent)
+                    toast(error?.message ?: "Could not parse the .cube file.")
+                }
+            }
+        }.start()
+    }
+
+    private fun refreshCubeLutSummary() {
+        if (!::lutSummary.isInitialized) return
+        val lut = selectedCubeLut
+        lutSummary.text = if (lut == null) {
+            "No .cube CC LUT loaded"
+        } else {
+            "${lut.title} · ${lut.size}³ LUT · ${lut.entryCount} colour points"
+        }
+        lutSummary.setTextColor(if (lut == null) muted else white)
     }
 
     private fun editTextOverlay() {
