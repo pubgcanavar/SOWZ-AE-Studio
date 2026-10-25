@@ -25,6 +25,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
+import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -66,6 +67,7 @@ class EditorActivity : Activity() {
     private var restoreEndMs: Long? = null
     private var brightnessValue = 0f
     private var contrastValue = 0f
+    private var rotationDegrees = 0
     private var draggingScrubber = false
 
     private lateinit var playerView: PlayerView
@@ -79,6 +81,8 @@ class EditorActivity : Activity() {
     private lateinit var brightnessSeek: SeekBar
     private lateinit var contrastSeek: SeekBar
     private lateinit var effectSummary: TextView
+    private lateinit var rotationSummary: TextView
+    private val rotationButtons = mutableMapOf<Int, TextView>()
     private lateinit var exportButton: TextView
 
     private val syncPlayback = object : Runnable {
@@ -342,6 +346,26 @@ class EditorActivity : Activity() {
         }, top = 9)
         add(content, effectsPanel, bottom = 13)
 
+        val transformPanel = panel()
+        add(transformPanel, label("Transform"))
+        add(transformPanel, body("Rotate the source before rendering. Preview and export use the same transform.", 12f, muted), top = 5)
+        rotationSummary = body("Rotation: 0°", 12f, accent, true)
+        add(transformPanel, rotationSummary, top = 10)
+        val rotationRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        listOf(0, 90, 180, 270).forEachIndexed { index, degrees ->
+            val control = button("${degrees}°", secondary = degrees != rotationDegrees) { setRotation(degrees) }
+            rotationButtons[degrees] = control
+            rotationRow.addView(control, LinearLayout.LayoutParams(0, -2, 1f).apply {
+                if (index > 0) leftMargin = dp(6f)
+            })
+        }
+        transformPanel.addView(rotationRow)
+        refreshRotationControls()
+        add(content, transformPanel, bottom = 13)
+
         val exportPanel = panel()
         add(exportPanel, label("Project and export"))
         add(exportPanel, body("Save your editable trim points and source reference, or render the selected range to MP4.", 12f, muted), top = 5)
@@ -440,6 +464,7 @@ class EditorActivity : Activity() {
                 .put("trimEndMs", clipEndMs)
                 .put("brightness", brightnessValue.toDouble())
                 .put("contrast", contrastValue.toDouble())
+                .put("rotationDegrees", rotationDegrees)
                 .put("frameRate", 30)
                 .put("createdWith", "SOWZ AE Studio 0.3.0")
                 .toString(2)
@@ -478,9 +503,11 @@ class EditorActivity : Activity() {
             restoreEndMs = end
             brightnessValue = document.optDouble("brightness", 0.0).toFloat().coerceIn(-1f, 1f)
             contrastValue = document.optDouble("contrast", 0.0).toFloat().coerceIn(-1f, 1f)
+            rotationDegrees = document.optInt("rotationDegrees", 0).let { if (it in setOf(0, 90, 180, 270)) it else 0 }
             brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
             contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
             updateColorValues()
+            refreshRotationControls()
             loadVideo(Uri.parse(sourceString), Intent.FLAG_GRANT_READ_URI_PERMISSION)
             status.text = "Project loaded · opening source media…"
             status.setTextColor(accent)
@@ -593,7 +620,25 @@ class EditorActivity : Activity() {
         val effects = mutableListOf<Effect>()
         if (abs(brightnessValue) > 0.001f) effects.add(Brightness(brightnessValue))
         if (abs(contrastValue) > 0.001f) effects.add(Contrast(contrastValue))
+        if (rotationDegrees != 0) {
+            effects.add(ScaleAndRotateTransformation.Builder().setRotationDegrees(rotationDegrees.toFloat()).build())
+        }
         return effects
+    }
+
+    private fun setRotation(degrees: Int) {
+        rotationDegrees = if (degrees in setOf(0, 90, 180, 270)) degrees else 0
+        refreshRotationControls()
+        player?.setVideoEffects(buildVideoEffects())
+    }
+
+    private fun refreshRotationControls() {
+        if (::rotationSummary.isInitialized) rotationSummary.text = "Rotation: ${rotationDegrees}°"
+        rotationButtons.forEach { (degrees, control) ->
+            val selected = degrees == rotationDegrees
+            control.background = rounded(if (selected) accent else surface2, 12f, if (selected) null else border)
+            control.setTextColor(if (selected) Color.rgb(25, 19, 14) else white)
+        }
     }
 
     private fun beginExport() {
