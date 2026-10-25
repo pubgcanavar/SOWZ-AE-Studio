@@ -51,7 +51,7 @@ import kotlin.math.ceil
 import kotlin.math.min
 
 /**
- * First real editing path: import a local video, preview it, select a trim range and export MP4.
+ * Native video editing foundation: sequential clips, trim, text/color effects, transforms, saved projects and MP4 export.
  * This is intentionally a working foundation, not a claim of full After Effects compatibility.
  */
 @OptIn(UnstableApi::class)
@@ -495,10 +495,10 @@ class EditorActivity : Activity() {
         clipQueueSummary.text = buildString {
             append("01  ").append(mainName)
             shownNames.forEachIndexed { index, name ->
-                append("\\n").append(String.format(Locale.ROOT, "%02d", index + 2)).append("  ").append(name)
+                append("\n").append(String.format(Locale.ROOT, "%02d", index + 2)).append("  ").append(name)
             }
-            if (more > 0) append("\\n… and ").append(more).append(" more")
-            append("\\nTotal clips: ").append(1 + additionalClipUris.size)
+            if (more > 0) append("\n… and ").append(more).append(" more")
+            append("\nTotal clips: ").append(1 + additionalClipUris.size)
         }
         if (::removeLastClipButton.isInitialized) {
             removeLastClipButton.isEnabled = additionalClipUris.isNotEmpty()
@@ -585,7 +585,7 @@ class EditorActivity : Activity() {
                     additionalClipUris.forEach { put(it.toString()) }
                 })
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 0.3.0")
+                .put("createdWith", "SOWZ AE Studio 0.4.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
@@ -785,7 +785,7 @@ class EditorActivity : Activity() {
             .setMessage("This text is rendered on the video. Keep it short for best fit.")
             .setView(input)
             .setPositiveButton("Apply") { _, _ ->
-                overlayText = input.text?.toString()?.trim()?.replace("\\n", " ")?.take(120).orEmpty()
+                overlayText = input.text?.toString()?.trim()?.replace("\n", " ")?.take(120).orEmpty()
                 refreshTextOverlay()
                 player?.setVideoEffects(buildVideoEffects())
                 status.text = if (overlayText.isBlank()) "Text overlay cleared." else "Text overlay updated."
