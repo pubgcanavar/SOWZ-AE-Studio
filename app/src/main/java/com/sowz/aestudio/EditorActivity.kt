@@ -1,6 +1,7 @@
 package com.sowz.aestudio
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -10,8 +11,14 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.View
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -25,7 +32,10 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
+import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.ScaleAndRotateTransformation
+import androidx.media3.effect.StaticOverlaySettings
+import androidx.media3.effect.TextOverlay
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -68,6 +78,7 @@ class EditorActivity : Activity() {
     private var brightnessValue = 0f
     private var contrastValue = 0f
     private var rotationDegrees = 0
+    private var overlayText = ""
     private var draggingScrubber = false
 
     private lateinit var playerView: PlayerView
@@ -83,6 +94,7 @@ class EditorActivity : Activity() {
     private lateinit var effectSummary: TextView
     private lateinit var rotationSummary: TextView
     private val rotationButtons = mutableMapOf<Int, TextView>()
+    private lateinit var textOverlaySummary: TextView
     private lateinit var exportButton: TextView
 
     private val syncPlayback = object : Runnable {
@@ -366,6 +378,20 @@ class EditorActivity : Activity() {
         refreshRotationControls()
         add(content, transformPanel, bottom = 13)
 
+        val textPanel = panel()
+        add(textPanel, label("Text overlay"))
+        add(textPanel, body("Add a title or watermark. It is rendered into the preview and exported MP4.", 12f, muted), top = 5)
+        textOverlaySummary = body("No text overlay", 13f, white, true)
+        add(textPanel, textOverlaySummary, top = 9)
+        add(textPanel, button("Add / edit text") { editTextOverlay() }, top = 10)
+        add(textPanel, button("Remove text overlay", secondary = true) {
+            overlayText = ""
+            refreshTextOverlay()
+            player?.setVideoEffects(buildVideoEffects())
+        }, top = 8)
+        refreshTextOverlay()
+        add(content, textPanel, bottom = 13)
+
         val exportPanel = panel()
         add(exportPanel, label("Project and export"))
         add(exportPanel, body("Save your editable trim points and source reference, or render the selected range to MP4.", 12f, muted), top = 5)
@@ -465,6 +491,7 @@ class EditorActivity : Activity() {
                 .put("brightness", brightnessValue.toDouble())
                 .put("contrast", contrastValue.toDouble())
                 .put("rotationDegrees", rotationDegrees)
+                .put("textOverlay", overlayText)
                 .put("frameRate", 30)
                 .put("createdWith", "SOWZ AE Studio 0.3.0")
                 .toString(2)
@@ -504,10 +531,12 @@ class EditorActivity : Activity() {
             brightnessValue = document.optDouble("brightness", 0.0).toFloat().coerceIn(-1f, 1f)
             contrastValue = document.optDouble("contrast", 0.0).toFloat().coerceIn(-1f, 1f)
             rotationDegrees = document.optInt("rotationDegrees", 0).let { if (it in setOf(0, 90, 180, 270)) it else 0 }
+            overlayText = document.optString("textOverlay", "").take(120)
             brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
             contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
             updateColorValues()
             refreshRotationControls()
+            refreshTextOverlay()
             loadVideo(Uri.parse(sourceString), Intent.FLAG_GRANT_READ_URI_PERMISSION)
             status.text = "Project loaded · opening source media…"
             status.setTextColor(accent)
@@ -623,7 +652,49 @@ class EditorActivity : Activity() {
         if (rotationDegrees != 0) {
             effects.add(ScaleAndRotateTransformation.Builder().setRotationDegrees(rotationDegrees.toFloat()).build())
         }
+        if (overlayText.isNotBlank()) {
+            val styledText = SpannableString(overlayText).apply {
+                setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(BackgroundColorSpan(0x99000000.toInt()), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(StyleSpan(Typeface.BOLD), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            val settings = StaticOverlaySettings.Builder()
+                .setBackgroundFrameAnchor(0f, -0.78f)
+                .setOverlayFrameAnchor(0f, 0f)
+                .setScale(0.7f, 0.7f)
+                .build()
+            effects.add(OverlayEffect(listOf(TextOverlay.createStaticTextOverlay(styledText, settings))))
+        }
         return effects
+    }
+
+    private fun editTextOverlay() {
+        val input = EditText(this).apply {
+            setText(overlayText)
+            hint = "Your title or watermark"
+            setSingleLine(false)
+            maxLines = 3
+            setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Text overlay")
+            .setMessage("This text is rendered on the video. Keep it short for best fit.")
+            .setView(input)
+            .setPositiveButton("Apply") { _, _ ->
+                overlayText = input.text?.toString()?.trim()?.replace("\\n", " ")?.take(120).orEmpty()
+                refreshTextOverlay()
+                player?.setVideoEffects(buildVideoEffects())
+                status.text = if (overlayText.isBlank()) "Text overlay cleared." else "Text overlay updated."
+                status.setTextColor(if (overlayText.isBlank()) muted else green)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun refreshTextOverlay() {
+        if (!::textOverlaySummary.isInitialized) return
+        textOverlaySummary.text = if (overlayText.isBlank()) "No text overlay" else overlayText
+        textOverlaySummary.setTextColor(if (overlayText.isBlank()) muted else white)
     }
 
     private fun setRotation(degrees: Int) {
