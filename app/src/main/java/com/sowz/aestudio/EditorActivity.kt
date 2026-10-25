@@ -40,6 +40,8 @@ class EditorActivity : Activity() {
     private companion object {
         const val REQUEST_IMPORT_VIDEO = 2101
         const val REQUEST_EXPORT_FILE = 2102
+        const val REQUEST_SAVE_PROJECT = 2103
+        const val REQUEST_OPEN_PROJECT = 2104
         const val SCALE_MAX = 1000
         const val MIN_CLIP_MS = 500L
     }
@@ -53,6 +55,8 @@ class EditorActivity : Activity() {
     private var durationMs = 0L
     private var clipStartMs = 0L
     private var clipEndMs = 0L
+    private var restoreStartMs: Long? = null
+    private var restoreEndMs: Long? = null
     private var draggingScrubber = false
 
     private lateinit var playerView: PlayerView
@@ -207,6 +211,7 @@ class EditorActivity : Activity() {
         add(sourcePanel, sourceLabel)
         add(sourcePanel, body("Local video files stay on this device. Select a clip to start.", 12f, muted), top = 5)
         add(sourcePanel, button("＋  Import video", secondary = false) { pickVideo() }, top = 13)
+        add(sourcePanel, button("Open saved project (.sowzproj)", secondary = true) { pickProject() }, top = 8)
         add(content, sourcePanel, bottom = 13)
 
         val previewPanel = panel()
@@ -288,8 +293,9 @@ class EditorActivity : Activity() {
         add(content, trimPanel, bottom = 13)
 
         val exportPanel = panel()
-        add(exportPanel, label("Export"))
-        add(exportPanel, body("Exports the selected video range to a new MP4 file using Android Media3 Transformer.", 12f, muted), top = 5)
+        add(exportPanel, label("Project and export"))
+        add(exportPanel, body("Save your editable trim points and source reference, or render the selected range to MP4.", 12f, muted), top = 5)
+        add(exportPanel, button("Save project (.sowzproj)", secondary = true) { startProjectSavePicker() }, top = 10)
         status = body("Ready when a video is imported.", 12f, green)
         add(exportPanel, status, top = 11)
         exportButton = button("Export trimmed MP4") { startExportPicker() }
@@ -304,6 +310,8 @@ class EditorActivity : Activity() {
     }
 
     private fun pickVideo() {
+        restoreStartMs = null
+        restoreEndMs = null
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "video/*"
@@ -340,6 +348,90 @@ class EditorActivity : Activity() {
                 pendingExportUri = uri
                 beginExport()
             }
+            REQUEST_SAVE_PROJECT -> saveProject(uri)
+            REQUEST_OPEN_PROJECT -> loadProject(uri)
+        }
+    }
+
+    private fun pickProject() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_OPEN_PROJECT)
+    }
+
+    private fun startProjectSavePicker() {
+        if (sourceUri == null || durationMs <= 0L || clipEndMs <= clipStartMs) {
+            toast("Import a video and choose a valid trim range before saving a project.")
+            return
+        }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/json"
+            putExtra(Intent.EXTRA_TITLE, "SOWZ-project.sowzproj")
+        }
+        startActivityForResult(intent, REQUEST_SAVE_PROJECT)
+    }
+
+    private fun saveProject(destination: Uri) {
+        try {
+            val source = sourceUri ?: error("No source video is loaded.")
+            if (durationMs <= 0L || clipEndMs <= clipStartMs) error("The current trim range is invalid.")
+            val document = org.json.JSONObject()
+                .put("kind", "SOWZ-AE-STUDIO-PROJECT")
+                .put("schemaVersion", 1)
+                .put("projectName", sourceLabel.text.toString().substringBeforeLast('.'))
+                .put("sourceUri", source.toString())
+                .put("sourceDisplayName", sourceLabel.text.toString())
+                .put("sourceDurationMs", durationMs)
+                .put("trimStartMs", clipStartMs)
+                .put("trimEndMs", clipEndMs)
+                .put("frameRate", 30)
+                .put("createdWith", "SOWZ AE Studio 0.3.0")
+                .toString(2)
+            val output = contentResolver.openOutputStream(destination, "w")
+                ?: error("Could not open the project destination.")
+            output.use { it.write(document.toByteArray(Charsets.UTF_8)) }
+            status.text = "Project saved · ${formatTime(clipStartMs)}–${formatTime(clipEndMs)}"
+            status.setTextColor(green)
+            toast("SOWZ project saved.")
+        } catch (error: Exception) {
+            status.text = "Could not save project: ${error.message ?: "unknown error"}"
+            status.setTextColor(accent)
+        }
+    }
+
+    private fun loadProject(projectUri: Uri) {
+        try {
+            val bytes = contentResolver.openInputStream(projectUri)?.use { input ->
+                val result = input.readBytes()
+                if (result.size > 1_048_576) error("Project file exceeds the 1 MB safety limit.")
+                result
+            } ?: error("Could not read the selected project.")
+            val document = org.json.JSONObject(String(bytes, Charsets.UTF_8))
+            if (document.optString("kind") != "SOWZ-AE-STUDIO-PROJECT") {
+                error("This is not a SOWZ .sowzproj file.")
+            }
+            if (document.optInt("schemaVersion", 0) != 1) {
+                error("This project version is not supported by this build.")
+            }
+            val sourceString = document.optString("sourceUri")
+            if (sourceString.isBlank()) error("The project has no source media reference.")
+            val start = document.optLong("trimStartMs", 0L)
+            val end = document.optLong("trimEndMs", 0L)
+            if (start < 0L || end <= start) error("The project contains an invalid trim range.")
+            restoreStartMs = start
+            restoreEndMs = end
+            loadVideo(Uri.parse(sourceString), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            status.text = "Project loaded · opening source media…"
+            status.setTextColor(accent)
+        } catch (error: Exception) {
+            restoreStartMs = null
+            restoreEndMs = null
+            status.text = "Could not open project: ${error.message ?: "unknown error"}"
+            status.setTextColor(accent)
         }
     }
 
@@ -372,10 +464,21 @@ class EditorActivity : Activity() {
                     val value = nextPlayer.duration
                     if (value != C.TIME_UNSET && value > 0L) {
                         durationMs = value
-                        clipStartMs = 0L
-                        clipEndMs = value
-                        inPoint.progress = 0
-                        outPoint.progress = SCALE_MAX
+                        val requestedStart = restoreStartMs
+                        val requestedEnd = restoreEndMs
+                        if (requestedStart != null && requestedEnd != null) {
+                            clipStartMs = requestedStart.coerceIn(0L, (value - 1L).coerceAtLeast(0L))
+                            clipEndMs = requestedEnd.coerceIn((clipStartMs + 1L).coerceAtMost(value), value)
+                            inPoint.progress = ((clipStartMs.toDouble() / value.toDouble()) * SCALE_MAX).toInt()
+                            outPoint.progress = ((clipEndMs.toDouble() / value.toDouble()) * SCALE_MAX).toInt().coerceIn(1, SCALE_MAX)
+                            restoreStartMs = null
+                            restoreEndMs = null
+                        } else {
+                            clipStartMs = 0L
+                            clipEndMs = value
+                            inPoint.progress = 0
+                            outPoint.progress = SCALE_MAX
+                        }
                         updateTrimUi()
                         playbackTime.text = "${formatTime(0L)} / ${formatTime(value)}"
                         status.text = "Video ready · ${formatTime(value)} total"
