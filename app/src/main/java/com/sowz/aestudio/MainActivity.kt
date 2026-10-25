@@ -20,6 +20,9 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.sowz.aestudio.core.AepParser
+import com.sowz.aestudio.core.FfxParser
+import com.sowz.aestudio.core.PresetEntry
+import com.sowz.aestudio.core.PresetStore
 import com.sowz.aestudio.core.ProjectReport
 import com.sowz.aestudio.core.ProjectStore
 import java.io.ByteArrayOutputStream
@@ -27,9 +30,11 @@ import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
-    private enum class Tab { HOME, PROJECTS, INSPECTOR, SETTINGS }
+    private enum class Tab { HOME, PROJECTS, PRESETS, INSPECTOR, SETTINGS }
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var store: ProjectStore
+    private lateinit var presetStore: PresetStore
+    private var pendingExportPreset: PresetEntry? = null
     private var tab = Tab.HOME
     private var report: ProjectReport? = null
     private var working = false
@@ -47,6 +52,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = ProjectStore(this)
+        presetStore = PresetStore(this)
         window.statusBarColor = bg
         window.navigationBarColor = bg
         window.decorView.systemUiVisibility = 0
@@ -167,6 +173,7 @@ class MainActivity : Activity() {
         when (tab) {
             Tab.HOME -> buildHome(content)
             Tab.PROJECTS -> buildProjects(content)
+            Tab.PRESETS -> buildPresets(content)
             Tab.INSPECTOR -> buildInspector(content)
             Tab.SETTINGS -> buildSettings(content)
         }
@@ -187,6 +194,7 @@ class MainActivity : Activity() {
             addView(text(when (tab) {
                 Tab.HOME -> "Project workspace"
                 Tab.PROJECTS -> "Recent projects"
+                Tab.PRESETS -> "Imported FFX presets"
                 Tab.INSPECTOR -> "Project inspector"
                 Tab.SETTINGS -> "Preferences"
             }, 12f, muted))
@@ -233,7 +241,7 @@ class MainActivity : Activity() {
             addView(spacer(18))
             addView(actionButton(if (working) "Inspecting project…" else "+   Open AE project") { if (!working) pickFile() })
             addView(spacer(9))
-            addView(actionButton("Open ZIP project package", secondary = true) { if (!working) pickFile() })
+            addView(actionButton("Import FFX preset", secondary = true) { if (!working) pickPresetFile() })
         }
         addBlock(parent, hero, bottom = 17)
 
@@ -321,6 +329,182 @@ class MainActivity : Activity() {
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Clear") { _, _ -> store.clear(); render() }.show()
             }, bottom = 14)
+        }
+    }
+
+    private fun buildPresets(parent: LinearLayout) {
+        addBlock(parent, text("Preset library", 24f, white, true), bottom = 5)
+        addBlock(parent, text("Keep your After Effects .ffx files organized on this device.", 13f, muted), bottom = 16)
+
+        val importCard = card()
+        importCard.addView(label("After Effects presets"))
+        importCard.addView(spacer(8))
+        importCard.addView(text("Import, inspect, keep and export original preset files.", 15f, white, true))
+        importCard.addView(spacer(6))
+        importCard.addView(text("Files are stored locally. The app does not rewrite or silently convert an FFX preset.", 12f, muted))
+        importCard.addView(spacer(13))
+        importCard.addView(actionButton(if (working) "Working…" else "+   Import .FFX preset") {
+            if (!working) pickPresetFile()
+        })
+        addBlock(parent, importCard, bottom = 15)
+
+        val entries = presetStore.list()
+        val summary = row()
+        summary.addView(statCard("PRESETS", entries.size.toString().padStart(2, '0'), "stored locally"), LinearLayout.LayoutParams(0, -2, 1f))
+        summary.addView(statCard("SPACE", formatBytes(entries.sumOf { it.sizeBytes }), "preset files"), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = d(10f) })
+        addBlock(parent, summary, bottom = 15)
+
+        if (entries.isEmpty()) {
+            val empty = card()
+            empty.addView(text("Your preset library is empty", 17f, white, true))
+            empty.addView(spacer(7))
+            empty.addView(text("Tap Import .FFX preset and select a preset exported by After Effects. Files are accepted only when the header matches RIFX / FaFX / head.", 13f, muted))
+            addBlock(parent, empty, bottom = 12)
+        } else {
+            entries.forEach { entry ->
+                val preset = card()
+                preset.addView(row().apply {
+                    addView(text("FFX", 11f, accent, true).apply {
+                        gravity = Gravity.CENTER
+                        setPadding(d(10f), d(10f), d(10f), d(10f))
+                        background = rounded(Color.rgb(55, 37, 29), 12f)
+                    })
+                    addView(vertical().apply {
+                        setPadding(d(11f), 0, 0, 0)
+                        addView(text(entry.fileName, 15f, white, true))
+                        addView(spacer(3))
+                        addView(text(formatBytes(entry.sizeBytes) + "  ·  imported " + java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(entry.importedAt)), 11f, muted))
+                        addView(spacer(4))
+                        addView(text("Original file preserved", 11f, green, true))
+                    }, LinearLayout.LayoutParams(0, -2, 1f))
+                })
+                preset.addView(spacer(12))
+                preset.addView(actionButton("Inspect preset details  →", secondary = true) { inspectPreset(entry) })
+                preset.addView(spacer(7))
+                preset.addView(actionButton("Export original .FFX", secondary = true) { exportPreset(entry) })
+                preset.addView(spacer(7))
+                preset.addView(actionButton("Remove from library", secondary = true) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Remove preset?")
+                        .setMessage("This deletes the copy stored inside SOWZ AE Studio. It does not delete any other copy of the file.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Remove") { _, _ ->
+                            if (presetStore.delete(entry)) Toast.makeText(this, "Preset removed", Toast.LENGTH_SHORT).show()
+                            else Toast.makeText(this, "Could not remove the preset", Toast.LENGTH_LONG).show()
+                            render()
+                        }.show()
+                })
+                addBlock(parent, preset, bottom = 12)
+            }
+        }
+
+        errorMessage?.let { message ->
+            val error = card()
+            error.addView(text("Preset action failed", 16f, accent, true))
+            error.addView(spacer(6))
+            error.addView(text(message, 12f, muted))
+            addBlock(parent, error, bottom = 12)
+        }
+    }
+
+    private fun pickPresetFile() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/octet-stream", "application/x-ffx", "application/binary"))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQUEST_PRESET_IMPORT)
+    }
+
+    private fun importPresetUri(uri: Uri) {
+        if (working) {
+            Toast.makeText(this, "Please wait for the current inspection to finish.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        working = true
+        errorMessage = null
+        render()
+        val sourceName = queryFileName(uri)
+        worker.execute {
+            try {
+                val entry = presetStore.import(contentResolver, uri, sourceName)
+                val parsed = FfxParser.inspect(entry.fileName, presetStore.readBytes(entry))
+                runOnUiThread {
+                    report = parsed
+                    working = false
+                    errorMessage = null
+                    tab = Tab.PRESETS
+                    render()
+                    Toast.makeText(this, "FFX preset imported and stored locally", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    working = false
+                    errorMessage = e.message ?: "Could not import this preset."
+                    tab = Tab.PRESETS
+                    render()
+                }
+            }
+        }
+    }
+
+    private fun inspectPreset(entry: PresetEntry) {
+        if (working) return
+        working = true
+        render()
+        worker.execute {
+            try {
+                val parsed = FfxParser.inspect(entry.fileName, presetStore.readBytes(entry))
+                runOnUiThread {
+                    report = parsed
+                    working = false
+                    tab = Tab.INSPECTOR
+                    render()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    working = false
+                    errorMessage = e.message ?: "Could not inspect this preset."
+                    tab = Tab.PRESETS
+                    render()
+                }
+            }
+        }
+    }
+
+    private fun exportPreset(entry: PresetEntry) {
+        pendingExportPreset = entry
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/octet-stream"
+            putExtra(Intent.EXTRA_TITLE, entry.fileName)
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQUEST_EXPORT_PRESET)
+    }
+
+    private fun savePresetTo(uri: Uri) {
+        val entry = pendingExportPreset
+        pendingExportPreset = null
+        if (entry == null) {
+            Toast.makeText(this, "No preset selected for export.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        worker.execute {
+            try {
+                val bytes = presetStore.readBytes(entry)
+                contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    ?: throw IllegalArgumentException("Could not write the exported preset.")
+                runOnUiThread {
+                    Toast.makeText(this, "Original FFX exported without modification", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, e.message ?: "Export failed", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -452,6 +636,7 @@ class MainActivity : Activity() {
         listOf(
             Triple(Tab.HOME, "⌂", "Home"),
             Triple(Tab.PROJECTS, "▤", "Projects"),
+            Triple(Tab.PRESETS, "✦", "Presets"),
             Triple(Tab.INSPECTOR, "⌕", "Inspect"),
             Triple(Tab.SETTINGS, "⚙", "Settings")
         ).forEach { (target, glyph, title) ->
@@ -498,8 +683,12 @@ class MainActivity : Activity() {
         if (requestCode == REQUEST_OPEN) {
             try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
             openUri(uri)
+        } else if (requestCode == REQUEST_PRESET_IMPORT) {
+            importPresetUri(uri)
         } else if (requestCode == REQUEST_SAVE_REPORT) {
             saveReportTo(uri)
+        } else if (requestCode == REQUEST_EXPORT_PRESET) {
+            savePresetTo(uri)
         }
     }
 
@@ -511,6 +700,7 @@ class MainActivity : Activity() {
         errorMessage = null
         val name = queryFileName(uri)
         val ext = name.substringAfterLast('.', "").lowercase()
+        if (ext == "ffx") { importPresetUri(uri); return }
         if (ext !in setOf("aep", "aepx", "aet", "zip")) {
             errorMessage = "Unsupported extension ." + ext + ". Choose an .aep, .aepx, .aet or .zip file."
             tab = Tab.HOME
@@ -614,5 +804,7 @@ class MainActivity : Activity() {
     companion object {
         private const val REQUEST_OPEN = 7201
         private const val REQUEST_SAVE_REPORT = 7202
+        private const val REQUEST_PRESET_IMPORT = 7203
+        private const val REQUEST_EXPORT_PRESET = 7204
     }
 }

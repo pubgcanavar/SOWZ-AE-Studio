@@ -1,20 +1,27 @@
 # SOWZ AE Studio
 
-A native Android project inspector for Adobe After Effects project files.
+Native Android project and preset inspector for Adobe After Effects project files.
 
-**Important compatibility note:** This app is not Adobe After Effects and does not render every composition, effect, expression, or third-party plugin. The binary AEP format is private and version-sensitive. This first build inspects the RIFX/chunk structure and readable strings; AEPX XML files receive heuristic composition/layer detection. Unsupported features are reported honestly.
+## Current build
 
-## Build
-Open Actions and run **Build SOWZ AE Studio APK**, or use the workflow artifact created after each push to main. It builds a debug APK and runs unit tests.
+- Import .aep, .aepx, .aet and .zip project packages.
+- Inspect .ffx presets in a dedicated local preset library.
+- Preserve imported FFX bytes unchanged; inspect the RIFX/FaFX/header layout, raw version marker, chunk inventory and SHA-256.
+- Export original FFX files and remove the private app copy.
+- Secure XML parser settings; bounded input sizes, ZIP scanning, binary chunk count and recursion depth.
+- Dark graphite/orange interface with a fox mark, recent projects, inspector, preset library and report export.
+- GitHub Actions runs unit tests and builds a downloadable debug APK.
 
-## Features
-- File picker for AEP, AEPX, AET and ZIP project packages
-- Local-only file processing; no broad storage permission
-- Safe XML inspection with external entities disabled
-- Bounded binary RIFX chunk inspection
-- ZIP project scan and likely-media inventory
-- Dark graphite/orange interface, recent projects, report export
-- GitHub Actions APK build pipeline
+## Compatibility, honestly
 
-## Roadmap
-Validate parser behavior against authorized project files from multiple After Effects versions; improve the typed binary project graph; then add timeline and preview support for a clearly defined subset. Never treat parsing as proof of exact rendering.
+This application is not Adobe After Effects. The proprietary binary AEP and FFX formats are version-sensitive. Binary AEP support in this build is structural inspection and limited readable-string extraction; FFX support is read-only inspection and local preset-file management. AEPX / AET XML detection is heuristic. This build does not evaluate expressions, render every AE effect, run third-party plugins, apply FFX presets to an AE-compatible renderer, or write edits back into AEP.
+
+An accepted file header is not proof that the entire file can be rendered or applied correctly. See docs/FFX_PRESET_SUPPORT.md and docs/PARSER_LIMITS.md.
+
+## Build on GitHub
+
+Open Actions and run Build SOWZ AE Studio APK. The workflow runs parser unit tests, builds a debug APK, and uploads artifact SOWZ-AE-Studio-debug-apk. Download the artifact ZIP and extract the APK from it.
+
+## Privacy
+
+Project and preset bytes are processed locally by the app. Imported presets are saved to the app's private directory; reports may include file names and readable strings, so review before sharing.
