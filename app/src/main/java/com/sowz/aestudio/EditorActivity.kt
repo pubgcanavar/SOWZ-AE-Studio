@@ -455,7 +455,7 @@ class EditorActivity : Activity() {
         add(exportPanel, button("Cancel export", secondary = true) { cancelExport() }, top = 8)
         add(content, exportPanel, bottom = 15)
 
-        add(content, body("Current milestone: real single-clip trim/export. Multi-layer compositing, text/shape layers, AE .ffx effect translation and advanced effects are separate stages and are not falsely marked as complete.", 11f, muted))
+        add(content, body("Current milestone: native video editing with a limited .ffx translator for static Brightness & Contrast. Unsupported effects, keyframes and third-party plug-ins are never reported as applied.", 11f, muted))
         scroll.addView(content)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         return root
@@ -620,7 +620,7 @@ class EditorActivity : Activity() {
                     additionalClipUris.forEach { put(it.toString()) }
                 })
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 0.5.0")
+                .put("createdWith", "SOWZ AE Studio 0.6.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
