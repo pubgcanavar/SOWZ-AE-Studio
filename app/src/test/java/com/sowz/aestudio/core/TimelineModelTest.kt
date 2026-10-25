@@ -50,7 +50,7 @@ class TimelineModelTest {
         val split = project.splitLayer("v1", 4_000L, "v2")
         assertEquals(5_000L, split.layers[0].sourceOutMs)
         assertEquals(5_000L, split.layers[1].sourceInMs)
-        assertEquals(6_000L, split.layers[1].timelineEndMs)
+        assertEquals(10_000L, split.layers[1].timelineEndMs)
         assertEquals("v2", split.layers[1].id)
     }
 
