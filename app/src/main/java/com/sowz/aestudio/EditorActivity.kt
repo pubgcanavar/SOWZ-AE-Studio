@@ -19,7 +19,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.media3.common.C
 import androidx.media3.common.Effect
-import androidx.media3.common.Effects
+import androidx.media3.transformer.Effects
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
