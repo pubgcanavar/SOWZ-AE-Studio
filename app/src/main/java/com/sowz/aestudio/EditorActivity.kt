@@ -82,6 +82,7 @@ class EditorActivity : Activity() {
     private var contrastValue = 0f
     private var rotationDegrees = 0
     private var overlayText = ""
+    private var exportClipCount = 1
     private var draggingScrubber = false
 
     private lateinit var playerView: PlayerView
@@ -854,6 +855,7 @@ class EditorActivity : Activity() {
         }
         val sequence = EditedMediaItemSequence.withAudioAndVideoFrom(sequenceItems)
         val composition = Composition.Builder(sequence).build()
+        exportClipCount = sequenceItems.size
         status.text = "Rendering ${sequenceItems.size} clip(s)… keep the app open until export finishes."
         status.setTextColor(accent)
         exportButton.isEnabled = false
@@ -903,7 +905,7 @@ class EditorActivity : Activity() {
                     ?: error("Could not open the selected export location.")
                 output.use { sink -> temp.inputStream().use { input -> input.copyTo(sink) } }
                 runOnUiThread {
-                    status.text = "Export complete · ${sequenceItems.size} clip(s) · ${temp.length() / 1024L} KB written."
+                    status.text = "Export complete · ${exportClipCount} clip(s) · ${temp.length() / 1024L} KB written."
                     status.setTextColor(green)
                     toast("MP4 export completed.")
                     exportButton.isEnabled = true
