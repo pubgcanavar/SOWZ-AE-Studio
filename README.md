@@ -1,41 +1,43 @@
 # SOWZ AE Studio
 
-A native Android motion/video-editing project with a real local media pipeline and a deliberately explicit After Effects compatibility boundary.
+A native Android video-editing foundation. This project now performs real local video processing; it is still not a complete After Effects or Nova Editor replacement.
 
-## Current build (0.4.0)
+## Current build — 0.5.0
 
-- **Import and preview:** choose local video files with Android's document picker and preview the main clip using Media3/ExoPlayer.
-- **Trim and sequence:** choose IN/OUT points for the main clip, then add up to 20 additional video clips to a sequential cut. Additional clips are used at full duration and exported after the main clip.
-- **Real rendered effects:** brightness, contrast, 90° rotation steps, and a styled text/watermark overlay are passed to Media3 both for preview of the main clip and for MP4 export.
-- **Project save/reopen:** save source URI references, trim points, effect settings, overlay text, and the ordered extra-clip list in a versioned `.sowzproj` JSON project. Source files themselves are not copied into the project.
-- **Timeline model:** tested millisecond-based layer timing, source offsets, frame/time conversion, visibility, splitting and linearly/hold-interpolated float keyframes.
-- **After Effects inspection:** import and inspect `.aep`, `.aepx`, `.aet` and ZIP project packages; import, inspect, store and export original `.ffx` files unchanged.
-- Dark graphite/orange interface with the SOWZ fox identity.
+- **Import and preview:** pick a local video using Android's document picker and preview the main clip with Media3/ExoPlayer.
+- **Trim and sequential cut:** set IN/OUT points for the main clip, add up to 20 additional video clips, then render a sequential MP4 composition. Additional clips play at full duration after the trimmed main clip.
+- **Applied colour controls:** brightness and contrast adjustments; quarter-turn rotation (0°, 90°, 180°, 270°); text/title/watermark overlay.
+- **CC / 3D LUT:** import a standard `.cube` 3D colour lookup table. The LUT is applied to the main-clip preview and rendered output using Media3 `SingleColorLut`.
+- **Save/reopen projects:** the versioned `.sowzproj` file stores trim points, effects, text, LUT and source media URI references.
+- **After Effects file inspection:** inspect `.aep`, `.aepx`, `.aet` and ZIP project packages; import/inspect/store/export original `.ffx` bytes without modifying them.
+- Dark graphite/orange UI with the SOWZ fox identity.
 
-## What is not implemented yet
+## Important compatibility limits
 
-This is **not a complete After Effects or Frameify replacement**.
+This is an incremental working editor, **not a full After Effects replacement**.
 
-- The export can join clips sequentially, but the combined sequence is not yet shown in one integrated multi-track preview. Only the main clip is live-previewed.
-- Additional clips currently use their full duration; trim handles apply to the main clip. The UI queue is a simple ordered cut, not a multi-track layer timeline. There are no crossfades yet.
-- Project files store URI references rather than copying media into a portable project package. Keep the original source videos available and readable on the device.
-- `.ffx` is still inspected/stored read-only. The app does not yet decode and apply every preset parameter, animated property, expression or plug-in effect.
-- Binary `.aep` inspection is structural and partial. `.aepx`/`.aet` use best-effort XML inspection. The app does not evaluate expressions or write edits back to original AEP projects.
-- After Effects `.aex` plug-ins are desktop binaries and cannot simply be installed in an Android app. Individual effects must be implemented or ported to an Android-compatible renderer and validated separately.
-- AI upscaling, background removal, face/text tracking, stabilisation, optical-flow interpolation and advanced speed ramps are not marked as available until real models/algorithms are integrated and tested.
+- The sequential clip queue is not yet a full multi-track timeline. Only the main clip has trim handles and live preview; added clips play at full duration. There are no overlapping visual tracks or transitions yet.
+- The timeline/keyframe model has unit tests, but animated properties are not yet connected to a fully composited renderer/export timeline.
+- **`.cube` CC LUT support is real but scoped:** the current importer supports standalone 3D LUTs with sizes 2–64 and the standard `DOMAIN_MIN 0 0 0` / `DOMAIN_MAX 1 1 1` domain. It rejects 1D shaper tables and nonstandard domains rather than silently producing an incorrect result. Colour results may differ from After Effects because the host colour pipeline and LUT conventions are not universally identical.
+- **`.ffx` presets are not applied yet.** They are currently imported and inspected/stored read-only. After Effects presets can include specific effects, parameters, keyframes, expressions and plug-in dependencies; a native SOWZ translator still needs to decode each supported part and map it to an actual Android effect. The app does not claim arbitrary FFX compatibility.
+- Binary `.aep` inspection is structural and partial; `.aepx`/`.aet` inspection is best-effort XML. Original AEP projects are not edited or rendered.
+- After Effects `.aex` plug-ins are desktop binaries and cannot simply be installed into Android. Effects need Android-compatible implementations and individual compatibility tests.
+- AI upscaling, background removal, tracking, stabilisation, optical-flow interpolation and advanced speed curves are not implemented merely because they appear in the roadmap.
 
-A file being accepted is not proof that it can be rendered correctly. The UI and documentation distinguish implemented behavior from future work.
+A preset/file being accepted is not proof that its effect can be reproduced correctly. The UI and documentation distinguish implemented functions from planned work.
 
-## Public feature research
+## Research sources
 
-The public-facing [Frameify Studio page](https://frameify.wasmer.app/) was reviewed for product-level workflows such as project import/export, aspect-ratio choices, preview, timeline/layers, inspector panels, keyframes, text, effects and export quality. We use those as independent product-design references, not as permission to copy private account data or proprietary source code.
+The public-facing [Frameify Studio page](https://frameify.wasmer.app/) was reviewed for product-level workflows such as canvas ratios, preview, timeline/layers, keyframes, text, effects, After Effects preset access and export settings. These features are independent design targets; this repository does not use private accounts, leaked credentials or non-public user data.
 
-The open-source [FFX Compatibility Tool](https://github.com/marbou92/FFX-Compatibility-Tool) is published under the MIT license and is a research candidate for preset metadata/format analysis. Its code has not been copied into the Android app; any future reuse needs a license and Android-portability review.
+For the CC LUT implementation, the app uses AndroidX Media3's public `SingleColorLut` API. See the [official Media3 editing guide](https://developer.android.com/media/implement/editing-app) and [SingleColorLut reference](https://developer.android.com/reference/androidx/media3/effect/SingleColorLut).
 
-## Build and verification
+The [FFX Compatibility Tool](https://github.com/marbou92/FFX-Compatibility-Tool) is a public MIT-licensed research candidate for understanding FFX metadata. Its desktop code has not been copied into this Android app.
 
-Open [GitHub Actions](https://github.com/pubgcanavar/SOWZ-AE-Studio/actions) and run **Build SOWZ AE Studio APK**. CI runs unit tests, builds a debug APK, and uploads the artifact `SOWZ-AE-Studio-debug-apk` as a ZIP containing the APK.
+## Build
+
+Open [GitHub Actions](https://github.com/pubgcanavar/SOWZ-AE-Studio/actions) and run **Build SOWZ AE Studio APK**. CI runs unit tests, builds a debug APK and uploads the artifact `SOWZ-AE-Studio-debug-apk` as a ZIP containing the APK.
 
 ## Privacy
 
-Media import uses Android's document picker. The current editing/export pipeline runs locally and does not intentionally upload source video. The app writes exports only to the location chosen by the user. Imported media URIs remain references, so a project may stop reopening if source permissions are revoked or a file is moved/deleted.
+The editor processes selected videos on-device and does not intentionally upload source media. Export files are written to the location selected by the user. Project files store URI references instead of copying the source media, so original videos must remain accessible on the device for reopening.

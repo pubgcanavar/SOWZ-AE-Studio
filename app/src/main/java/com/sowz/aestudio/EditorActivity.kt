@@ -616,7 +616,7 @@ class EditorActivity : Activity() {
                     additionalClipUris.forEach { put(it.toString()) }
                 })
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 0.4.0")
+                .put("createdWith", "SOWZ AE Studio 0.5.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
