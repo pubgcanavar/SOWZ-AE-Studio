@@ -18,8 +18,13 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.media3.common.C
+import androidx.media3.common.Effect
+import androidx.media3.common.Effects
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.Brightness
+import androidx.media3.effect.Contrast
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -29,6 +34,7 @@ import androidx.media3.transformer.Transformer
 import androidx.media3.ui.PlayerView
 import java.io.File
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.min
 
@@ -36,6 +42,7 @@ import kotlin.math.min
  * First real editing path: import a local video, preview it, select a trim range and export MP4.
  * This is intentionally a working foundation, not a claim of full After Effects compatibility.
  */
+@OptIn(UnstableApi::class)
 class EditorActivity : Activity() {
     private companion object {
         const val REQUEST_IMPORT_VIDEO = 2101
@@ -57,6 +64,8 @@ class EditorActivity : Activity() {
     private var clipEndMs = 0L
     private var restoreStartMs: Long? = null
     private var restoreEndMs: Long? = null
+    private var brightnessValue = 0f
+    private var contrastValue = 0f
     private var draggingScrubber = false
 
     private lateinit var playerView: PlayerView
@@ -67,6 +76,9 @@ class EditorActivity : Activity() {
     private lateinit var sourceLabel: TextView
     private lateinit var status: TextView
     private lateinit var trimSummary: TextView
+    private lateinit var brightnessSeek: SeekBar
+    private lateinit var contrastSeek: SeekBar
+    private lateinit var effectSummary: TextView
     private lateinit var exportButton: TextView
 
     private val syncPlayback = object : Runnable {
@@ -292,6 +304,44 @@ class EditorActivity : Activity() {
         add(trimPanel, trimSummary, top = 8)
         add(content, trimPanel, bottom = 13)
 
+        val effectsPanel = panel()
+        add(effectsPanel, label("Color effects"))
+        add(effectsPanel, body("Brightness and contrast run on the exported frames and are previewed with the same Media3 effects.", 12f, muted), top = 5)
+        add(effectsPanel, label("Brightness"), top = 12)
+        brightnessSeek = SeekBar(this).apply {
+            max = 200
+            progress = 100
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateColorValues()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, brightnessSeek)
+        add(effectsPanel, label("Contrast"), top = 5)
+        contrastSeek = SeekBar(this).apply {
+            max = 200
+            progress = 100
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateColorValues()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, contrastSeek)
+        effectSummary = body("Brightness 0.00  ·  Contrast 0.00", 12f, accent, true)
+        add(effectsPanel, effectSummary, top = 7)
+        add(effectsPanel, button("Reset color controls", secondary = true) {
+            brightnessSeek.progress = 100
+            contrastSeek.progress = 100
+            updateColorValues()
+        }, top = 9)
+        add(content, effectsPanel, bottom = 13)
+
         val exportPanel = panel()
         add(exportPanel, label("Project and export"))
         add(exportPanel, body("Save your editable trim points and source reference, or render the selected range to MP4.", 12f, muted), top = 5)
@@ -388,6 +438,8 @@ class EditorActivity : Activity() {
                 .put("sourceDurationMs", durationMs)
                 .put("trimStartMs", clipStartMs)
                 .put("trimEndMs", clipEndMs)
+                .put("brightness", brightnessValue.toDouble())
+                .put("contrast", contrastValue.toDouble())
                 .put("frameRate", 30)
                 .put("createdWith", "SOWZ AE Studio 0.3.0")
                 .toString(2)
@@ -424,6 +476,11 @@ class EditorActivity : Activity() {
             if (start < 0L || end <= start) error("The project contains an invalid trim range.")
             restoreStartMs = start
             restoreEndMs = end
+            brightnessValue = document.optDouble("brightness", 0.0).toFloat().coerceIn(-1f, 1f)
+            contrastValue = document.optDouble("contrast", 0.0).toFloat().coerceIn(-1f, 1f)
+            brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
+            contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
+            updateColorValues()
             loadVideo(Uri.parse(sourceString), Intent.FLAG_GRANT_READ_URI_PERMISSION)
             status.text = "Project loaded · opening source media…"
             status.setTextColor(accent)
@@ -498,6 +555,7 @@ class EditorActivity : Activity() {
             }
         })
         nextPlayer.setMediaItem(MediaItem.fromUri(uri))
+        nextPlayer.setVideoEffects(buildVideoEffects())
         nextPlayer.prepare()
         nextPlayer.playWhenReady = false
     }
@@ -522,6 +580,20 @@ class EditorActivity : Activity() {
         } else {
             trimSummary.text = "IN ${formatTime(clipStartMs)}   ·   OUT ${formatTime(clipEndMs)}   ·   ${String.format(Locale.ROOT, "%.2f", (clipEndMs - clipStartMs) / 1000.0)} s"
         }
+    }
+
+    private fun updateColorValues() {
+        brightnessValue = ((brightnessSeek.progress - 100) / 100f).coerceIn(-1f, 1f)
+        contrastValue = ((contrastSeek.progress - 100) / 100f).coerceIn(-1f, 1f)
+        effectSummary.text = "Brightness ${String.format(Locale.ROOT, "%.2f", brightnessValue)}  ·  Contrast ${String.format(Locale.ROOT, "%.2f", contrastValue)}"
+        player?.setVideoEffects(buildVideoEffects())
+    }
+
+    private fun buildVideoEffects(): List<Effect> {
+        val effects = mutableListOf<Effect>()
+        if (abs(brightnessValue) > 0.001f) effects.add(Brightness(brightnessValue))
+        if (abs(contrastValue) > 0.001f) effects.add(Contrast(contrastValue))
+        return effects
     }
 
     private fun beginExport() {
@@ -549,7 +621,9 @@ class EditorActivity : Activity() {
                     .build()
             )
             .build()
-        val editedItem = EditedMediaItem.Builder(clippedItem).build()
+        val editedItem = EditedMediaItem.Builder(clippedItem)
+            .setEffects(Effects(emptyList(), buildVideoEffects()))
+            .build()
         status.text = "Rendering selected range… keep the app open until export finishes."
         status.setTextColor(accent)
         exportButton.isEnabled = false
