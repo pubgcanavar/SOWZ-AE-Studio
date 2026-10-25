@@ -4,7 +4,7 @@ plugins {
 }
 android {
     namespace = "com.sowz.aestudio"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.sowz.aestudio"
         minSdk = 24
