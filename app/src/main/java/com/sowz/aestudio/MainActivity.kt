@@ -242,6 +242,10 @@ class MainActivity : Activity() {
             addView(actionButton(if (working) "Inspecting project…" else "+   Open AE project") { if (!working) pickFile() })
             addView(spacer(9))
             addView(actionButton("Import FFX preset", secondary = true) { if (!working) pickPresetFile() })
+            addView(spacer(9))
+            addView(actionButton("Open video editor  →") {
+                startActivity(Intent(this@MainActivity, EditorActivity::class.java))
+            })
         }
         addBlock(parent, hero, bottom = 17)
 
