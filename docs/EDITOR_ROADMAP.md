@@ -2,75 +2,87 @@
 
 Updated: 2026-10-25
 
-This plan uses only the public-facing Frameify Studio feature list as product research, plus licensed open-source format research. It does not rely on leaked credentials, private accounts, hidden user data, bypasses, or non-public source. Similar editor concepts are implemented independently.
+This roadmap uses only the public-facing Frameify Studio feature list and licensed open-source format research. It does not rely on leaked credentials, private account content, hidden user data, bypasses, or non-public source. Similar editor features are implemented independently.
 
-## Milestone 0 — real single-clip video edit (added in 0.3.0)
+## Milestone 0 — real on-device editing (0.4.0)
 
-- Pick a local video with Android's document picker.
-- Preview with Media3/ExoPlayer.
-- Set IN and OUT points using a timeline scrubber.
-- Export the selected clip range into a user-selected MP4 file with Media3 Transformer.
-- Model timeline layers, source ranges, frame/time conversion and float keyframes; unit tests cover the deterministic core.
+- Pick a main video through Android's document picker and preview it with Media3/ExoPlayer.
+- Mark IN/OUT points for the main clip.
+- Add up to 20 extra videos to a sequential cut; export them after the trimmed main clip.
+- Apply brightness, contrast, quarter-turn rotation and a styled text/watermark overlay to the preview and rendered output.
+- Save and reopen a `.sowzproj` JSON project with source URI references, main-clip trim, effect parameters, overlay and extra-clip order.
+- Provide cancel/error handling for export. Keep original source media local.
+- Include a tested, deterministic timeline/keyframe data model.
 
-This is deliberately narrow: it proves a genuine source → edit choice → rendered media file pipeline on device.
+This proves a genuine source → edit settings → rendered MP4 pipeline. The ordered clip queue is not a full multi-track editor, and only the main clip has trim handles.
 
-## Milestone 1 — project files and multi-track timeline
+## Milestone 1 — editable project format and clip controls
 
-- Persist an editable project format (versioned JSON inside a `.sowzproj` package) without altering source media.
-- Add multiple video, image, audio, text and shape tracks.
-- Add layer visibility/lock, ordering, trim, split, duplicate, delete, timeline zoom and playhead snapping.
-- Reopen the app and recover saved projects and their media references.
-- Validate URI permissions and provide a relink flow when a source disappears.
+- Add robust project schema migrations, source URI relink, permission recovery, and pre-export checks for unavailable media.
+- Give each queued clip its own trim range, duration/metadata and reorder/remove controls.
+- Add image and audio assets only after a render path and track behavior are tested.
+- Keep projects portable where possible by supporting user-selected media folders or packaging a project with assets; don't silently duplicate very large video files.
 
-Acceptance tests: create/edit/save/reopen a project; split a clip without losing source-time continuity; no UI action silently drops a layer.
+Acceptance tests: create/edit/save/reopen a project; reorder/remove/split clips without losing source-time continuity; no UI action silently discards media references.
 
-## Milestone 2 — composition preview and keyframes
+## Milestone 2 — real multi-track timeline and composite preview
 
-- Add transform controls (position, scale, rotation, opacity) with editable keyframes.
-- Connect the timeline model to preview rendering, and show a visible keyframe lane/property inspector.
-- Add canvas ratios: 9:16, 16:9, 1:1, 4:3, 4:5, 3:2, 21:9 and custom.
+- Connect the tested `TimelineProject` model to a timeline UI with clip blocks, a playhead, zoom, snapping, selection, track ordering, visibility and lock state.
+- Add independent video/image, audio, text and shape tracks with explicit z-order and overlapping timing.
+- Render the same composition model in preview and export. Do not display a fake composite preview that cannot match the exported file.
 - Add undo/redo with command-based history.
 - Keep time calculations in integer milliseconds/frame indexes to prevent floating-point drift.
 
-Acceptance tests: inspect exact transform values at keyframes; save/reopen preserves timing and property values; preview matches the model at frame boundaries.
+Acceptance tests: overlapping layer timing, visible order, audio selection and project restoration match reference results frame by frame.
 
-## Milestone 3 — original effect stack
+## Milestone 3 — transform animation and canvas settings
 
-- Implement mobile-compatible effects with deterministic parameters: brightness/contrast, saturation, hue, blur/sharpen, vignette and simple color adjustments.
-- Use Media3/OpenGL effects for preview/export where supported, sharing the same effect definitions.
-- Store each effect's parameters, order and enabled state in the project.
+- Add canvas ratios: 9:16, 16:9, 1:1, 3:4, 4:3, 4:5, 3:2, 21:9 and custom.
+- Add position, scale, rotation and opacity properties with editable linear/hold/eased keyframes.
+- Show property-specific keyframe lanes and previous/next keyframe navigation.
+- Support text editing (font, size, colour, alignment, outline/background) and shape layers after preview/export parity is implemented.
+
+Acceptance tests: exact property values at keyframe times; save/reopen preserves timing; preview matches output at frame boundaries.
+
+## Milestone 4 — native effect stack
+
+- Implement Android-native effects such as brightness, contrast, saturation, hue, blur/sharpen and vignette where Media3/OpenGL supports them.
+- Share identical effect definitions between preview and export.
+- Store each effect's parameters, order, enabled state and supported range in the project.
 - Test effects against reference frames and verify output on physical devices.
 
-These are SOWZ-native effects, not desktop plugin binaries. Effect names alone do not imply compatibility with an After Effects plug-in.
+These are SOWZ-native effects, not desktop plug-in binaries. An effect name alone does not imply compatibility with a commercial After Effects plug-in.
 
-## Milestone 4 — FFX and After Effects interoperability
+## Milestone 5 — FFX and After Effects interoperability
 
-- Improve `.ffx` parsing from generic chunk inventory to typed effect blocks, parameter names/values, keyframes and plugin dependency reports.
-- Research format differences and test fixtures from files users are entitled to use.
-- Build an explicit mapping table from supported FFX properties to native SOWZ effects.
-- For unsupported expressions/effects/plugins, show exact warnings and preserve the original file bytes. Never silently claim an unknown preset applied successfully.
-- Improve AEPX XML extraction first; investigate binary AEP read support separately.
+- Move `.ffx` parsing from generic chunk inventory toward typed effect blocks, parameter names/values, keyframes and plug-in dependency reports.
+- Research format differences and validate using test fixtures the developer is entitled to use.
+- Build an explicit mapping table from supported FFX parameters to SOWZ-native effects. Preserve unknown fields and original bytes.
+- Show exact warnings for unsupported expressions, plug-ins and effect parameters. Never claim an unsupported preset was applied.
+- Improve AEPX XML extraction first; investigate binary AEP read/write separately.
 - Never execute scripts or expressions embedded in imported projects.
 
-Acceptance tests: each claimed FFX conversion uses a known fixture, lists unsupported blocks, and has an exported output compared with a trusted reference. No write-back to original AEP unless the format writer is validated independently.
+Acceptance tests: every claimed FFX mapping uses a known fixture; unsupported blocks are listed; exported output is compared with a trusted reference. No write-back to original AEP unless the writer is independently validated.
 
-## Milestone 5 — expanded export pipeline
+## Milestone 6 — expanded output pipeline
 
-- Multi-layer rendering, audio mixing, transition boundaries, output aspect ratio, frame rate, bitrate and quality settings.
-- Progress, cancel, recoverable failure messages and low-storage checks.
+- Multi-track rendering, audio mixing, transitions where supported, canvas/aspect-ratio control, frame rate, bitrate and quality settings.
+- Export progress, cancellation, recoverable failure messages and low-storage checks.
 - Render at actual composition resolution; preview quality is a separate performance setting.
-- Test varied codecs/resolutions and large files on real devices; provide memory limits and warnings.
+- Test codecs/resolutions and large files on real devices; set memory limits and useful warnings.
 
-## Milestone 6 — advanced tools (separate feasibility checks)
+Media3 Transformer supports trimming, scaling/rotation, effects and compositions for sequential/multi-asset workflows; crossfades still need specific handling. See the [official editing guide](https://developer.android.com/media/implement/editing-app) and [composition guide](https://developer.android.com/media/media3/transformer/composition).
 
-- Speed curves and slow motion; frame interpolation is a different technical feature and cannot be promised by a simple playback-rate change.
-- Stabilisation, face/text tracking, background removal and upscaling only after choosing an actual on-device model/library or a transparent opt-in service. Do not add buttons that imply an AI tool exists when it is only a placeholder.
-- Report supported input types, local/cloud processing, device requirements, license and performance before marking each tool complete.
+## Milestone 7 — advanced/AI tools (separate feasibility checks)
+
+- Speed ramps and slow motion; optical-flow interpolation is a separate algorithm, not just a speed setting.
+- Stabilisation, face/text tracking, background removal and upscaling only after a real on-device model/library or transparent opt-in service is selected and validated.
+- Record supported inputs, local/cloud processing, device requirements, licence and performance before exposing a tool as ready.
 
 ## Engineering rules
 
-1. Every feature in the UI must have a working action or be clearly labelled as planned.
-2. CI must compile and test after each milestone; no "APK done" claim until the artifact is built successfully.
-3. Keep source assets local by default and do not collect telemetry without an explicit design and privacy review.
-4. Respect third-party licenses and trademarks. Reuse only code whose license permits it and preserve required notices.
-5. Never use leaked private data, credentials, hidden endpoints, or access-control bypasses as development inputs.
+1. Every visible control performs a real action or is clearly marked as planned.
+2. CI compiles and tests after each milestone; an APK is called ready only after its exact artifact is built successfully.
+3. Keep media local by default and collect no telemetry without explicit design and privacy review.
+4. Respect third-party licences and trademarks; reuse only code whose licence permits it, preserving required notices.
+5. Never use leaked private data, credentials, hidden endpoints or access-control bypasses as development inputs.
