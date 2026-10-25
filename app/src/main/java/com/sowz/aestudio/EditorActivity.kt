@@ -39,6 +39,7 @@ import androidx.media3.effect.TextOverlay
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
@@ -60,6 +61,7 @@ class EditorActivity : Activity() {
         const val REQUEST_EXPORT_FILE = 2102
         const val REQUEST_SAVE_PROJECT = 2103
         const val REQUEST_OPEN_PROJECT = 2104
+        const val REQUEST_ADD_CLIPS = 2105
         const val SCALE_MAX = 1000
         const val MIN_CLIP_MS = 500L
     }
@@ -68,6 +70,7 @@ class EditorActivity : Activity() {
     private var player: ExoPlayer? = null
     private var transformer: Transformer? = null
     private var sourceUri: Uri? = null
+    private val additionalClipUris = mutableListOf<Uri>()
     private var pendingExportUri: Uri? = null
     private var temporaryOutput: File? = null
     private var durationMs = 0L
@@ -89,6 +92,8 @@ class EditorActivity : Activity() {
     private lateinit var sourceLabel: TextView
     private lateinit var status: TextView
     private lateinit var trimSummary: TextView
+    private lateinit var clipQueueSummary: TextView
+    private lateinit var removeLastClipButton: TextView
     private lateinit var brightnessSeek: SeekBar
     private lateinit var contrastSeek: SeekBar
     private lateinit var effectSummary: TextView
@@ -320,6 +325,22 @@ class EditorActivity : Activity() {
         add(trimPanel, trimSummary, top = 8)
         add(content, trimPanel, bottom = 13)
 
+        val timelinePanel = panel()
+        add(timelinePanel, label("Timeline sequence"))
+        add(timelinePanel, body("The main clip plays first. Add videos to play after it in order; the selected trim range applies to the main clip and added clips use their full duration.", 12f, muted), top = 5)
+        clipQueueSummary = body("Main clip: none", 13f, white, true)
+        add(timelinePanel, clipQueueSummary, top = 9)
+        add(timelinePanel, button("＋  Add videos to final cut") { pickAdditionalClips() }, top = 10)
+        removeLastClipButton = button("Remove last added clip", secondary = true) {
+            if (additionalClipUris.isNotEmpty()) {
+                additionalClipUris.removeAt(additionalClipUris.lastIndex)
+                refreshClipQueueSummary()
+            }
+        }
+        add(timelinePanel, removeLastClipButton, top = 8)
+        refreshClipQueueSummary()
+        add(content, timelinePanel, bottom = 13)
+
         val effectsPanel = panel()
         add(effectsPanel, label("Color effects"))
         add(effectsPanel, body("Brightness and contrast run on the exported frames and are previewed with the same Media3 effects.", 12f, muted), top = 5)
@@ -412,12 +433,77 @@ class EditorActivity : Activity() {
     private fun pickVideo() {
         restoreStartMs = null
         restoreEndMs = null
+        additionalClipUris.clear()
+        refreshClipQueueSummary()
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "video/*"
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
         startActivityForResult(intent, REQUEST_IMPORT_VIDEO)
+    }
+
+    private fun pickAdditionalClips() {
+        if (sourceUri == null) {
+            toast("Import the main video first.")
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "video/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_ADD_CLIPS)
+    }
+
+    private fun addAdditionalClips(data: Intent?) {
+        val main = sourceUri
+        val flags = (data?.flags ?: 0) and Intent.FLAG_GRANT_READ_URI_PERMISSION
+        val incoming = mutableListOf<Uri>()
+        data?.clipData?.let { clips ->
+            for (index in 0 until clips.itemCount) {
+                clips.getItemAt(index)?.uri?.let { incoming.add(it) }
+            }
+        }
+        if (incoming.isEmpty()) data?.data?.let { incoming.add(it) }
+        if (incoming.isEmpty()) return
+
+        var added = 0
+        for (uri in incoming) {
+            if (uri == main || uri in additionalClipUris) continue
+            if (additionalClipUris.size >= 20) break
+            try {
+                contentResolver.takePersistableUriPermission(uri, flags)
+            } catch (_: Exception) {
+                // Some providers only issue temporary grants; the current session may still read them.
+            }
+            additionalClipUris.add(uri)
+            added++
+        }
+        refreshClipQueueSummary()
+        toast(if (added > 0) "Added $added clip(s) to the final cut." else "No new clips were added.")
+    }
+
+    private fun refreshClipQueueSummary() {
+        if (!::clipQueueSummary.isInitialized) return
+        val mainName = if (::sourceLabel.isInitialized && sourceLabel.text.isNotBlank()) {
+            sourceLabel.text.toString()
+        } else "Main clip"
+        val shownNames = additionalClipUris.take(4).map { queryDisplayName(it) }
+        val more = additionalClipUris.size - shownNames.size
+        clipQueueSummary.text = buildString {
+            append("01  ").append(mainName)
+            shownNames.forEachIndexed { index, name ->
+                append("\\n").append(String.format(Locale.ROOT, "%02d", index + 2)).append("  ").append(name)
+            }
+            if (more > 0) append("\\n… and ").append(more).append(" more")
+            append("\\nTotal clips: ").append(1 + additionalClipUris.size)
+        }
+        if (::removeLastClipButton.isInitialized) {
+            removeLastClipButton.isEnabled = additionalClipUris.isNotEmpty()
+            removeLastClipButton.alpha = if (additionalClipUris.isNotEmpty()) 1f else 0.45f
+        }
     }
 
     private fun startExportPicker() {
@@ -441,15 +527,18 @@ class EditorActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
         when (requestCode) {
-            REQUEST_IMPORT_VIDEO -> loadVideo(uri, data.flags)
+            REQUEST_IMPORT_VIDEO -> {
+                val uri = data?.data ?: return
+                loadVideo(uri, data.flags)
+            }
             REQUEST_EXPORT_FILE -> {
-                pendingExportUri = uri
+                pendingExportUri = data?.data ?: return
                 beginExport()
             }
-            REQUEST_SAVE_PROJECT -> saveProject(uri)
-            REQUEST_OPEN_PROJECT -> loadProject(uri)
+            REQUEST_SAVE_PROJECT -> saveProject(data?.data ?: return)
+            REQUEST_OPEN_PROJECT -> loadProject(data?.data ?: return)
+            REQUEST_ADD_CLIPS -> addAdditionalClips(data)
         }
     }
 
@@ -492,6 +581,9 @@ class EditorActivity : Activity() {
                 .put("contrast", contrastValue.toDouble())
                 .put("rotationDegrees", rotationDegrees)
                 .put("textOverlay", overlayText)
+                .put("additionalClipUris", org.json.JSONArray().apply {
+                    additionalClipUris.forEach { put(it.toString()) }
+                })
                 .put("frameRate", 30)
                 .put("createdWith", "SOWZ AE Studio 0.3.0")
                 .toString(2)
@@ -523,6 +615,17 @@ class EditorActivity : Activity() {
             }
             val sourceString = document.optString("sourceUri")
             if (sourceString.isBlank()) error("The project has no source media reference.")
+            additionalClipUris.clear()
+            val savedClips = document.optJSONArray("additionalClipUris")
+            if (savedClips != null) {
+                for (index in 0 until min(savedClips.length(), 20)) {
+                    val clipValue = savedClips.optString(index)
+                    if (clipValue.isBlank() || clipValue == sourceString) continue
+                    val clipUri = Uri.parse(clipValue)
+                    if (clipUri !in additionalClipUris) additionalClipUris.add(clipUri)
+                }
+            }
+            refreshClipQueueSummary()
             val start = document.optLong("trimStartMs", 0L)
             val end = document.optLong("trimEndMs", 0L)
             if (start < 0L || end <= start) error("The project contains an invalid trim range.")
@@ -565,6 +668,7 @@ class EditorActivity : Activity() {
         outPoint.progress = SCALE_MAX
         scrubber.progress = 0
         sourceLabel.text = queryDisplayName(uri)
+        refreshClipQueueSummary()
         status.text = "Opening video…"
         status.setTextColor(accent)
 
@@ -740,7 +844,17 @@ class EditorActivity : Activity() {
         val editedItem = EditedMediaItem.Builder(clippedItem)
             .setEffects(Effects(emptyList(), buildVideoEffects()))
             .build()
-        status.text = "Rendering selected range… keep the app open until export finishes."
+        val sequenceItems = mutableListOf(editedItem)
+        additionalClipUris.forEach { clipUri ->
+            sequenceItems.add(
+                EditedMediaItem.Builder(MediaItem.fromUri(clipUri))
+                    .setEffects(Effects(emptyList(), buildVideoEffects()))
+                    .build()
+            )
+        }
+        val sequence = EditedMediaItemSequence.withAudioAndVideoFrom(sequenceItems)
+        val composition = Composition.Builder(sequence).build()
+        status.text = "Rendering ${sequenceItems.size} clip(s)… keep the app open until export finishes."
         status.setTextColor(accent)
         exportButton.isEnabled = false
         exportButton.alpha = 0.55f
@@ -769,7 +883,7 @@ class EditorActivity : Activity() {
             }).build()
         transformer = activeTransformer
         try {
-            activeTransformer.start(editedItem, temp.absolutePath)
+            activeTransformer.start(composition, temp.absolutePath)
         } catch (error: Exception) {
             status.text = "Could not start export: ${error.message ?: "unknown error"}"
             status.setTextColor(accent)
@@ -789,7 +903,7 @@ class EditorActivity : Activity() {
                     ?: error("Could not open the selected export location.")
                 output.use { sink -> temp.inputStream().use { input -> input.copyTo(sink) } }
                 runOnUiThread {
-                    status.text = "Export complete · ${temp.length() / 1024L} KB written to your chosen location."
+                    status.text = "Export complete · ${sequenceItems.size} clip(s) · ${temp.length() / 1024L} KB written."
                     status.setTextColor(green)
                     toast("MP4 export completed.")
                     exportButton.isEnabled = true
