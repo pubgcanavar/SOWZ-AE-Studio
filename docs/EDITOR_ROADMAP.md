@@ -4,7 +4,7 @@ Updated: 2026-10-25
 
 This roadmap uses public product feature lists, official AndroidX Media3 APIs, and public/licensed file-format research. It does not use leaked private data, credentials, hidden endpoints or access-control bypasses.
 
-## Delivered foundation — 0.5.0
+## Delivered foundation — 0.6.0
 
 - Local source video import and main-clip playback preview.
 - IN/OUT trim handles for the main clip.
@@ -13,7 +13,8 @@ This roadmap uses public product feature lists, official AndroidX Media3 APIs, a
 - Standard 3D `.cube` CC LUT import, parsing and application via Media3 `SingleColorLut`.
 - Save/reopen `.sowzproj` with source URI references, edit settings, text, LUT and clip queue.
 - Tested timeline/keyframe data model (time conversion, layer timing, split/visibility and float interpolation).
-- Separate After Effects project/preset inspector.
+- After Effects project/preset inspector; `.ffx` effect-name and static-number decoding for recognized structures.
+- Limited `.ffx` translation: static `ADBE Brightness & Contrast` values are applied to the native brightness/contrast controls; animated or third-party effects remain unsupported.
 
 ## Next milestone — independent clip controls
 
@@ -51,7 +52,7 @@ These are SOWZ-native effects, not desktop After Effects plug-in binaries.
 
 ## FFX / After Effects interoperability
 
-- Decode typed FFX effect blocks, match names, parameter values, static/animated properties and plug-in dependencies.
+- Expand typed FFX effect parsing and supported static/animated property handling, then map each individually verified native effect.
 - Use valid test presets that the developer is entitled to use; compare decoded results with After Effects references.
 - Build an explicit mapping from supported FFX properties to SOWZ-native effects. Preserve original bytes and warn on unknown blocks.
 - Never claim an unsupported preset was applied. Never execute imported scripts/expressions.
