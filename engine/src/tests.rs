@@ -351,3 +351,30 @@ fn inspector_property_update_is_atomic_and_undoable() {
     assert!(engine.undo());
     assert_eq!(*engine.project(), before);
 }
+
+
+#[test]
+fn linked_media_asset_can_be_added_and_referenced_by_a_layer() {
+    let mut engine = EditorEngine::new(project()).expect("valid test project");
+    let asset_id = engine.project().next_id;
+    engine.execute(Command::AddAsset {
+        name: "sample-video.mp4".to_owned(),
+        kind: crate::AssetKind::Video,
+        source: crate::AssetSource::Linked { uri: "sample-video.mp4".to_owned() },
+    }).expect("asset should be added");
+    engine.execute(Command::AddLayer {
+        composition_id: 2,
+        track_id: 3,
+        name: "sample-video.mp4".to_owned(),
+        kind: LayerKind::Footage,
+        asset_id: Some(asset_id),
+        start_frame: 0,
+        duration_frames: 120,
+    }).expect("footage layer should be added");
+
+    let value = engine.project();
+    assert_eq!(value.assets.len(), 1);
+    assert_eq!(value.assets[0].id, asset_id);
+    assert_eq!(value.compositions[0].tracks[0].layers[0].asset_id, Some(asset_id));
+    assert!(value.validate().is_ok());
+}
