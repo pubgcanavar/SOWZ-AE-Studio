@@ -32,6 +32,7 @@ import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.audio.DefaultGainProvider
 import androidx.media3.common.audio.GainProcessor
 import androidx.media3.common.audio.ToInt16PcmAudioProcessor
+import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.common.Effect
 import androidx.media3.transformer.Effects
 import androidx.media3.common.MediaItem
@@ -40,6 +41,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
 import androidx.media3.effect.HslAdjustment
+import androidx.media3.effect.GaussianBlur
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.SingleColorLut
@@ -107,6 +109,8 @@ class EditorActivity : Activity() {
     private var brightnessValue = 0f
     private var contrastValue = 0f
     private var colorGrade = ColorGradeSettings()
+    private var blurSigma = 0f
+    private var mainClipSpeed = 1f
     private var rotationDegrees = 0
     private var overlayText = ""
     private var selectedCubeLut: CubeLutData? = null
@@ -137,6 +141,9 @@ class EditorActivity : Activity() {
     private lateinit var hueSeek: SeekBar
     private lateinit var saturationSeek: SeekBar
     private lateinit var lightnessSeek: SeekBar
+    private lateinit var blurSeek: SeekBar
+    private lateinit var mainSpeedSeek: SeekBar
+    private lateinit var speedSummary: TextView
     private lateinit var effectSummary: TextView
     private lateinit var lutSummary: TextView
     private lateinit var rotationSummary: TextView
@@ -505,7 +512,38 @@ class EditorActivity : Activity() {
             })
         }
         add(effectsPanel, lightnessSeek)
-        effectSummary = body("Brightness 0.00 · Contrast 0.00\nHue 0° · Saturation 0 · Lightness 0", 12f, accent, true)
+        add(effectsPanel, label("Gaussian Blur · 0 to 40"), top = 7)
+        blurSeek = SeekBar(this).apply {
+            max = 100
+            progress = 0
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    blurSigma = if (progress < 2) 0f else (progress / 100f) * 40f
+                    player?.setVideoEffects(buildVideoEffects())
+                    effectSummary.text = buildEffectSummary()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, blurSeek)
+        add(effectsPanel, label("Main clip speed · 0.25x to 4x"), top = 7)
+        mainSpeedSeek = SeekBar(this).apply {
+            max = 100
+            progress = 20
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateMainSpeedFromSeek()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, mainSpeedSeek)
+        speedSummary = body("Main clip speed · 1x", 11f, muted, true)
+        add(effectsPanel, speedSummary, top = 4)
+        effectSummary = body("Brightness 0.00 · Contrast 0.00\nHue 0° · Saturation 0 · Lightness 0\nBlur 0", 12f, accent, true)
         add(effectsPanel, effectSummary, top = 7)
         add(effectsPanel, button("Reset color controls", secondary = true) {
             brightnessSeek.progress = 100
@@ -513,7 +551,14 @@ class EditorActivity : Activity() {
             hueSeek.progress = 180
             saturationSeek.progress = 100
             lightnessSeek.progress = 100
+            blurSeek.progress = 0
+            mainSpeedSeek.progress = 20
+            blurSigma = 0f
+            mainClipSpeed = 1f
+            player?.setPlaybackSpeed(1f)
             updateColorValues()
+            speedSummary.text = "Main clip speed · 1x"
+            speedSummary.setTextColor(muted)
         }, top = 9)
         add(content, effectsPanel, bottom = 13)
 
@@ -593,8 +638,16 @@ class EditorActivity : Activity() {
         restoreEndMs = null
         additionalClipUris.clear()
         additionalClipTrims.clear()
+        blurSigma = 0f
+        mainClipSpeed = 1f
         resetQueueHistory()
         refreshClipQueueSummary()
+        if (::blurSeek.isInitialized) blurSeek.progress = 0
+        if (::mainSpeedSeek.isInitialized) mainSpeedSeek.progress = 20
+        if (::speedSummary.isInitialized) {
+            speedSummary.text = "Main clip speed · 1x"
+            speedSummary.setTextColor(muted)
+        }
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "video/*"
@@ -1083,8 +1136,10 @@ class EditorActivity : Activity() {
                             .put("trimEndMs", trim.endMs ?: -1L))
                     }
                 })
+                .put("mainClipSpeed", mainClipSpeed.toDouble())
+                .put("blurSigma", blurSigma.toDouble())
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 1.2.0")
+                .put("createdWith", "SOWZ AE Studio 1.3.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
@@ -1147,6 +1202,10 @@ class EditorActivity : Activity() {
             val savedHue = document.optDouble("hueAdjustmentDegrees", 0.0).toFloat()
             val savedSaturation = document.optDouble("saturationAdjustment", 0.0).toFloat()
             val savedLightness = document.optDouble("lightnessAdjustment", 0.0).toFloat()
+            val savedMainSpeed = document.optDouble("mainClipSpeed", 1.0).toFloat()
+            val savedBlurSigma = document.optDouble("blurSigma", 0.0).toFloat()
+            mainClipSpeed = if (savedMainSpeed.isFinite()) savedMainSpeed.coerceIn(0.25f, 4f) else 1f
+            blurSigma = if (savedBlurSigma.isFinite()) savedBlurSigma.coerceIn(0f, 40f) else 0f
             colorGrade = ColorGradeSettings(
                 hueAdjustmentDegrees = if (savedHue.isFinite()) savedHue.coerceIn(-180f, 180f) else 0f,
                 saturationAdjustment = if (savedSaturation.isFinite()) savedSaturation.coerceIn(-100f, 100f) else 0f,
@@ -1180,7 +1239,10 @@ class EditorActivity : Activity() {
             hueSeek.progress = (colorGrade.hueAdjustmentDegrees + 180f).toInt().coerceIn(0, 360)
             saturationSeek.progress = (colorGrade.saturationAdjustment + 100f).toInt().coerceIn(0, 200)
             lightnessSeek.progress = (colorGrade.lightnessAdjustment + 100f).toInt().coerceIn(0, 200)
+            blurSeek.progress = kotlin.math.round((blurSigma / 40f) * 100f).toInt().coerceIn(0, 100)
+            mainSpeedSeek.progress = kotlin.math.round(((mainClipSpeed - 0.25f) / 3.75f) * 100f).toInt().coerceIn(0, 100)
             updateColorValues()
+            updateMainSpeedFromSeek()
             refreshRotationControls()
             refreshTextOverlay()
             loadVideo(Uri.parse(sourceString), Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -1224,6 +1286,7 @@ class EditorActivity : Activity() {
                     val value = nextPlayer.duration
                     if (value != C.TIME_UNSET && value > 0L) {
                         durationMs = value
+                        nextPlayer.setPlaybackSpeed(mainClipSpeed)
                         val requestedStart = restoreStartMs
                         val requestedEnd = restoreEndMs
                         if (requestedStart != null && requestedEnd != null) {
@@ -1258,6 +1321,7 @@ class EditorActivity : Activity() {
             }
         })
         nextPlayer.setMediaItem(MediaItem.fromUri(uri))
+        nextPlayer.setPlaybackSpeed(mainClipSpeed)
         nextPlayer.setVideoEffects(buildVideoEffects())
         nextPlayer.prepare()
         nextPlayer.playWhenReady = false
@@ -1293,14 +1357,34 @@ class EditorActivity : Activity() {
             saturationAdjustment = (saturationSeek.progress - 100).toFloat(),
             lightnessAdjustment = (lightnessSeek.progress - 100).toFloat()
         )
-        effectSummary.text = buildString {
-            append("Brightness ").append(String.format(Locale.ROOT, "%.2f", brightnessValue))
-            append(" · Contrast ").append(String.format(Locale.ROOT, "%.2f", contrastValue))
-            append("\nHue ").append(colorGrade.hueAdjustmentDegrees.toInt()).append("°")
-            append(" · Saturation ").append(colorGrade.saturationAdjustment.toInt())
-            append(" · Lightness ").append(colorGrade.lightnessAdjustment.toInt())
-        }
+        effectSummary.text = buildEffectSummary()
         player?.setVideoEffects(buildVideoEffects())
+    }
+
+    private fun buildEffectSummary(): String = buildString {
+        append("Brightness ").append(String.format(Locale.ROOT, "%.2f", brightnessValue))
+        append(" · Contrast ").append(String.format(Locale.ROOT, "%.2f", contrastValue))
+        append("\nHue ").append(colorGrade.hueAdjustmentDegrees.toInt()).append("°")
+        append(" · Saturation ").append(colorGrade.saturationAdjustment.toInt())
+        append(" · Lightness ").append(colorGrade.lightnessAdjustment.toInt())
+        append("\nBlur ").append(if (blurSigma < 0.01f) "0" else String.format(Locale.ROOT, "%.1f", blurSigma))
+    }
+
+    private fun updateMainSpeedFromSeek() {
+        mainClipSpeed = 0.25f + (mainSpeedSeek.progress / 100f) * 3.75f
+        mainClipSpeed = (kotlin.math.round(mainClipSpeed * 100f) / 100f).coerceIn(0.25f, 4f)
+        speedSummary.text = "Main clip speed · " + formatSpeed(mainClipSpeed)
+        speedSummary.setTextColor(if (kotlin.math.abs(mainClipSpeed - 1f) < 0.001f) muted else accent)
+        player?.setPlaybackSpeed(mainClipSpeed)
+    }
+
+    private fun formatSpeed(speed: Float): String =
+        if (kotlin.math.abs(speed - speed.toInt()) < 0.001f) speed.toInt().toString() + "x"
+        else String.format(Locale.ROOT, "%.2fx", speed)
+
+    private fun buildSpeedProvider(speed: Float): SpeedProvider = object : SpeedProvider {
+        override fun getSpeed(timeUs: Long): Float = speed
+        override fun getNextSpeedChangeTimeUs(timeUs: Long): Long = C.TIME_UNSET
     }
 
 
@@ -1346,6 +1430,7 @@ class EditorActivity : Activity() {
                     .build()
             )
         }
+        if (blurSigma > 0.01f) effects.add(GaussianBlur(blurSigma))
         if (rotationDegrees != 0) {
             effects.add(ScaleAndRotateTransformation.Builder().setRotationDegrees(rotationDegrees.toFloat()).build())
         }
@@ -1635,6 +1720,7 @@ class EditorActivity : Activity() {
             )
             .build()
         val editedItem = EditedMediaItem.Builder(clippedItem)
+            .setSpeed(buildSpeedProvider(mainClipSpeed))
             .setEffects(Effects(buildAudioProcessors(sourceAudioSettings.gain), buildVideoEffects()))
             .build()
         val sequenceItems = mutableListOf(editedItem)
