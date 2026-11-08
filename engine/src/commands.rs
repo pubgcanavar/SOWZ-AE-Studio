@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::model::{
-    Effect, Interpolation, Keyframe, Layer, LayerKind, ParameterValue, Project,
+    Effect, Interpolation, Keyframe, Layer, LayerClipboard, LayerKind, ParameterValue, Project,
     ProjectError, PropertyValue, Track, TrackKind, Transform,
 };
 
@@ -23,6 +23,7 @@ pub enum Command {
     DuplicateLayer { layer_id: u64, new_start_frame: u64 },
     SplitLayer { layer_id: u64, at_frame: u64 },
     ReorderLayer { layer_id: u64, new_index: usize },
+    PasteLayer { composition_id: u64, track_id: u64, clipboard: LayerClipboard, new_start_frame: u64 },
     TrimLayer { layer_id: u64, new_duration_frames: u64 },
     SetLayerTransform { layer_id: u64, transform: Transform },
     SetLayerEnabled { layer_id: u64, enabled: bool },
@@ -52,6 +53,25 @@ impl EditorEngine {
 
     pub fn project(&self) -> &Project {
         &self.project
+    }
+
+    pub fn copy_layer(&self, layer_id: u64) -> Result<LayerClipboard, ProjectError> {
+        Ok(LayerClipboard::new(find_layer(&self.project, layer_id)?))
+    }
+
+    pub fn paste_layer(
+        &mut self,
+        composition_id: u64,
+        track_id: u64,
+        clipboard: LayerClipboard,
+        new_start_frame: u64,
+    ) -> Result<(), ProjectError> {
+        self.execute(Command::PasteLayer {
+            composition_id,
+            track_id,
+            clipboard,
+            new_start_frame,
+        })
     }
 
     pub fn can_undo(&self) -> bool {
@@ -190,6 +210,27 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
             let layer = layers.remove(layer_index);
             let destination = new_index.min(layers.len());
             layers.insert(destination, layer);
+        }
+        Command::PasteLayer { composition_id, track_id, clipboard, new_start_frame } => {
+            if clipboard.schema_version != LayerClipboard::SCHEMA_VERSION {
+                return Err(ProjectError::Invalid("unsupported clipboard schema version".to_owned()));
+            }
+            let mut layer = clipboard.layer;
+            layer.id = project.allocate_id()?;
+            layer.start_frame = new_start_frame;
+            for effect in &mut layer.effects {
+                effect.id = project.allocate_id()?;
+            }
+            for keyframe in &mut layer.keyframes {
+                keyframe.id = project.allocate_id()?;
+            }
+            let composition = project.compositions.iter_mut()
+                .find(|item| item.id == composition_id)
+                .ok_or(ProjectError::NotFound)?;
+            let track = composition.tracks.iter_mut()
+                .find(|item| item.id == track_id)
+                .ok_or(ProjectError::NotFound)?;
+            track.layers.push(layer);
         }
         Command::TrimLayer { layer_id, new_duration_frames } => {
             find_layer_mut(project, layer_id)?.duration_frames = new_duration_frames;
