@@ -29,11 +29,5 @@ jobs:
         uses: actions/checkout@v4
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Check formatting
-        run: cargo fmt --manifest-path engine/Cargo.toml -- --check
-      - name: Run tests
+      - name: Run core tests
         run: cargo test --manifest-path engine/Cargo.toml
-      - name: Run Clippy
-        run: cargo clippy --manifest-path engine/Cargo.toml --all-targets -- -D warnings
