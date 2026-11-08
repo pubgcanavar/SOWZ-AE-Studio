@@ -149,7 +149,8 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
             find_layer_mut(project, layer_id)?.start_frame = new_start_frame;
         }
         Command::DuplicateLayer { layer_id, new_start_frame } => {
-            let mut duplicate = find_layer(project, layer_id)?.clone();
+            let (composition_index, track_index, _, original) = find_layer_location(project, layer_id)?;
+            let mut duplicate = original;
             duplicate.id = project.allocate_id()?;
             duplicate.start_frame = new_start_frame;
             for effect in &mut duplicate.effects {
@@ -158,21 +159,7 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
             for keyframe in &mut duplicate.keyframes {
                 keyframe.id = project.allocate_id()?;
             }
-
-            let mut inserted = false;
-            for composition in &mut project.compositions {
-                for track in &mut composition.tracks {
-                    if track.layers.iter().any(|layer| layer.id == layer_id) {
-                        track.layers.push(duplicate);
-                        inserted = true;
-                        break;
-                    }
-                }
-                if inserted { break; }
-            }
-            if !inserted {
-                return Err(ProjectError::NotFound);
-            }
+            project.compositions[composition_index].tracks[track_index].layers.push(duplicate);
         }
         Command::SplitLayer { layer_id, at_frame } => {
             let (composition_index, track_index, layer_index, original) =
