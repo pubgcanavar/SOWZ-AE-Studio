@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -47,6 +48,7 @@ import androidx.media3.transformer.Transformer
 import androidx.media3.ui.PlayerView
 import com.sowz.aestudio.core.CubeLutData
 import com.sowz.aestudio.core.CubeLutParser
+import com.sowz.aestudio.core.ClipTrimRange
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -77,6 +79,8 @@ class EditorActivity : Activity() {
     private var transformer: Transformer? = null
     private var sourceUri: Uri? = null
     private val additionalClipUris = mutableListOf<Uri>()
+    // Kept index-aligned with additionalClipUris; duplicated source URIs can have different trim ranges.
+    private val additionalClipTrims = mutableListOf<ClipTrimRange>()
     private var pendingExportUri: Uri? = null
     private var temporaryOutput: File? = null
     private var durationMs = 0L
@@ -460,6 +464,7 @@ class EditorActivity : Activity() {
         restoreStartMs = null
         restoreEndMs = null
         additionalClipUris.clear()
+        additionalClipTrims.clear()
         refreshClipQueueSummary()
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -505,10 +510,117 @@ class EditorActivity : Activity() {
                 // Some providers only issue temporary grants; the current session may still read them.
             }
             additionalClipUris.add(uri)
+            additionalClipTrims.add(ClipTrimRange())
             added++
         }
         refreshClipQueueSummary()
         toast(if (added > 0) "Added $added clip(s) to the final cut." else "No new clips were added.")
+    }
+
+    private fun clipTrimLabel(range: ClipTrimRange): String =
+        if (range.startMs == 0L && range.endMs == null) {
+            "Full source · no trim"
+        } else {
+            "IN " + formatTime(range.startMs) + " · OUT " +
+                (range.endMs?.let { formatTime(it) } ?: "source end")
+        }
+
+    private fun editAdditionalClipTrim(index: Int) {
+        val uri = additionalClipUris.getOrNull(index) ?: return
+        status.text = "Reading source duration for " + queryDisplayName(uri) + "…"
+        status.setTextColor(accent)
+        Thread {
+            val duration = try {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(this, uri)
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                        ?: error("The provider did not report a readable video duration.")
+                } finally {
+                    retriever.release()
+                }
+            } catch (error: Exception) {
+                error
+            }
+            handler.post {
+                if (index !in additionalClipUris.indices || additionalClipUris[index] != uri) return@post
+                if (duration is Exception) {
+                    status.text = "Cannot read clip duration: " + (duration.message ?: "unsupported media")
+                    status.setTextColor(accent)
+                    toast("Could not read this clip's duration.")
+                    return@post
+                }
+                showAdditionalClipTrimDialog(index, (duration as Long).coerceAtLeast(1L))
+            }
+        }.start()
+    }
+
+    private fun showAdditionalClipTrimDialog(index: Int, sourceDurationMs: Long) {
+        val existing = additionalClipTrims.getOrElse(index) { ClipTrimRange() }
+        val safeRange = try {
+            existing.clampToDuration(sourceDurationMs)
+        } catch (_: IllegalArgumentException) {
+            ClipTrimRange()
+        }
+        val inputPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18f), dp(8f), dp(18f), 0)
+        }
+        val inField = EditText(this).apply {
+            hint = "IN point in seconds"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setSingleLine(true)
+            setText(String.format(Locale.ROOT, "%.3f", safeRange.startMs / 1000.0))
+        }
+        val outField = EditText(this).apply {
+            hint = "OUT point in seconds"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setSingleLine(true)
+            setText(String.format(Locale.ROOT, "%.3f", (safeRange.endMs ?: sourceDurationMs) / 1000.0))
+        }
+        inputPanel.addView(body("Source duration: " + formatTime(sourceDurationMs), 12f, muted))
+        inputPanel.addView(body("IN point (seconds)", 11f, muted), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10f) })
+        inputPanel.addView(inField)
+        inputPanel.addView(body("OUT point (seconds)", 11f, muted), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
+        inputPanel.addView(outField)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Trim · " + queryDisplayName(additionalClipUris[index]))
+            .setMessage("Set an independent source range for this clip. The values are seconds; the original file stays unchanged.")
+            .setView(inputPanel)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Apply", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val startSeconds = inField.text.toString().trim().toDoubleOrNull()
+                val endSeconds = outField.text.toString().trim().toDoubleOrNull()
+                if (startSeconds == null || endSeconds == null ||
+                    !startSeconds.isFinite() || !endSeconds.isFinite() ||
+                    startSeconds < 0.0 || endSeconds <= startSeconds ||
+                    endSeconds * 1000.0 > sourceDurationMs.toDouble()
+                ) {
+                    inField.error = "Use a valid IN value."
+                    outField.error = "OUT must be after IN and within the source duration."
+                    return@setOnClickListener
+                }
+                val startMs = (startSeconds * 1000.0).toLong()
+                val endMs = (endSeconds * 1000.0).toLong()
+                try {
+                    additionalClipTrims[index] = ClipTrimRange(startMs, endMs).clampToDuration(sourceDurationMs)
+                } catch (error: IllegalArgumentException) {
+                    outField.error = error.message
+                    return@setOnClickListener
+                }
+                refreshClipQueueSummary()
+                status.text = "Clip trim applied · " + formatTime(startMs) + "–" + formatTime(endMs)
+                status.setTextColor(green)
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
     }
 
     private fun refreshClipQueueSummary() {
@@ -538,7 +650,7 @@ class EditorActivity : Activity() {
             }
             info.addView(body("CLIP " + String.format(Locale.ROOT, "%02d", index + 2), 9.5f, accent, true))
             info.addView(body(queryDisplayName(uri), 12f, white, true))
-            info.addView(body("Queued after main clip", 10f, muted))
+            info.addView(body(clipTrimLabel(additionalClipTrims.getOrElse(index) { ClipTrimRange() }), 10f, muted))
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
 
             fun addAction(glyph: String, hint: String, enabled: Boolean, action: () -> Unit) {
@@ -547,6 +659,7 @@ class EditorActivity : Activity() {
                     LinearLayout.LayoutParams(dp(38f), dp(38f)).apply { marginStart = dp(4f) }
                 )
             }
+            addAction("✂", "Edit clip IN/OUT points", true) { editAdditionalClipTrim(index) }
             addAction("↑", "Move clip up", index > 0) { moveAdditionalClip(index, -1) }
             addAction("↓", "Move clip down", index < additionalClipUris.lastIndex) { moveAdditionalClip(index, 1) }
             addAction("+", "Duplicate clip", additionalClipUris.size < 20) { duplicateAdditionalClip(index) }
@@ -577,8 +690,11 @@ class EditorActivity : Activity() {
         val target = index + offset
         if (index !in additionalClipUris.indices || target !in additionalClipUris.indices) return
         val reordered = com.sowz.aestudio.core.ClipQueueOperations.move(additionalClipUris, index, target)
+        val reorderedTrims = com.sowz.aestudio.core.ClipQueueOperations.move(additionalClipTrims, index, target)
         additionalClipUris.clear()
         additionalClipUris.addAll(reordered)
+        additionalClipTrims.clear()
+        additionalClipTrims.addAll(reorderedTrims)
         refreshClipQueueSummary()
         status.text = "Clip moved. Export order updated."
         status.setTextColor(green)
@@ -591,6 +707,7 @@ class EditorActivity : Activity() {
             return
         }
         additionalClipUris.add(index + 1, uri)
+        additionalClipTrims.add(index + 1, additionalClipTrims.getOrElse(index) { ClipTrimRange() })
         refreshClipQueueSummary()
         status.text = "Clip duplicated in the sequence."
         status.setTextColor(green)
@@ -607,6 +724,7 @@ class EditorActivity : Activity() {
                 val updated = com.sowz.aestudio.core.ClipQueueOperations.remove(additionalClipUris, index)
                 additionalClipUris.clear()
                 additionalClipUris.addAll(updated)
+                if (index in additionalClipTrims.indices) additionalClipTrims.removeAt(index)
                 refreshClipQueueSummary()
                 status.text = "Clip removed from sequence. Source media is unchanged."
                 status.setTextColor(muted)
@@ -694,10 +812,16 @@ class EditorActivity : Activity() {
                 .put("cubeLutUri", selectedCubeLutUri?.toString())
                 .put("cubeLutTitle", selectedCubeLut?.title)
                 .put("additionalClipUris", org.json.JSONArray().apply {
-                    additionalClipUris.forEach { put(it.toString()) }
+                    additionalClipUris.forEachIndexed { index, uri ->
+                        val trim = additionalClipTrims.getOrElse(index) { ClipTrimRange() }
+                        put(org.json.JSONObject()
+                            .put("uri", uri.toString())
+                            .put("trimStartMs", trim.startMs)
+                            .put("trimEndMs", trim.endMs ?: -1L))
+                    }
                 })
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 0.7.0")
+                .put("createdWith", "SOWZ AE Studio 0.8.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
@@ -728,13 +852,24 @@ class EditorActivity : Activity() {
             val sourceString = document.optString("sourceUri")
             if (sourceString.isBlank()) error("The project has no source media reference.")
             additionalClipUris.clear()
+            additionalClipTrims.clear()
             val savedClips = document.optJSONArray("additionalClipUris")
             if (savedClips != null) {
                 for (index in 0 until min(savedClips.length(), 20)) {
-                    val clipValue = savedClips.optString(index)
+                    val rawClip = savedClips.opt(index)
+                    val clipObject = rawClip as? org.json.JSONObject
+                    val clipValue = if (clipObject != null) clipObject.optString("uri") else rawClip as? String ?: ""
                     if (clipValue.isBlank() || clipValue == sourceString) continue
                     val clipUri = Uri.parse(clipValue)
                     additionalClipUris.add(clipUri)
+                    val startMs = clipObject?.optLong("trimStartMs", 0L) ?: 0L
+                    val endValue = clipObject?.optLong("trimEndMs", -1L) ?: -1L
+                    val range = try {
+                        ClipTrimRange(startMs, endValue.takeIf { it > 0L })
+                    } catch (_: IllegalArgumentException) {
+                        ClipTrimRange()
+                    }
+                    additionalClipTrims.add(range)
                 }
             }
             refreshClipQueueSummary()
@@ -1166,9 +1301,19 @@ class EditorActivity : Activity() {
             .setEffects(Effects(emptyList(), buildVideoEffects()))
             .build()
         val sequenceItems = mutableListOf(editedItem)
-        additionalClipUris.forEach { clipUri ->
+        additionalClipUris.forEachIndexed { index, clipUri ->
+            val trim = additionalClipTrims.getOrElse(index) { ClipTrimRange() }
+            val clipItem = MediaItem.Builder()
+                .setUri(clipUri)
+                .setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder()
+                        .setStartPositionMs(trim.startMs)
+                        .apply { trim.endMs?.let { setEndPositionMs(it) } }
+                        .build()
+                )
+                .build()
             sequenceItems.add(
-                EditedMediaItem.Builder(MediaItem.fromUri(clipUri))
+                EditedMediaItem.Builder(clipItem)
                     .setEffects(Effects(emptyList(), buildVideoEffects()))
                     .build()
             )
