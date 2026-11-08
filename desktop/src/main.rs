@@ -8,8 +8,8 @@ use std::{
 
 use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use sowz_ae_core::{
-    AssetKind, AssetSource, Command, EditorEngine, Layer, LayerClipboard, LayerKind, LoadedPackage,
-    Project, TrackKind, Transform, load_package, save_package,
+    AssetKind, AssetSource, Command, EditorEngine, Interpolation, Layer, LayerClipboard, LayerKind, LoadedPackage,
+    Project, PropertyValue, TrackKind, Transform, load_package, save_package,
 };
 
 const DEFAULT_WIDTH: u32 = 1920;
@@ -458,6 +458,37 @@ impl SowzAeApp {
         self.sync_inspector();
     }
 
+    fn add_numeric_keyframe(&mut self, property: &'static str) {
+        let Some(layer) = self.selected_layer() else { return; };
+        let Some(frame) = self.playhead_frame.checked_sub(layer.start_frame) else {
+            self.status = "Move the playhead onto the selected layer first".to_owned();
+            return;
+        };
+        if frame > layer.duration_frames {
+            self.status = "Playhead is outside the selected layer".to_owned();
+            return;
+        }
+        let value = match property {
+            "position_x" => layer.transform.position_x,
+            "position_y" => layer.transform.position_y,
+            "scale_x" => layer.transform.scale_x,
+            "scale_y" => layer.transform.scale_y,
+            "rotation_degrees" => layer.transform.rotation_degrees,
+            "opacity" => layer.transform.opacity,
+            _ => {
+                self.status = "Unsupported animated property".to_owned();
+                return;
+            }
+        };
+        self.execute(Command::PutKeyframe {
+            layer_id: layer.id,
+            frame,
+            property: property.to_owned(),
+            value: PropertyValue::Number(value),
+            interpolation: Interpolation::Bezier,
+        });
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let (save, undo, redo, copy, paste) = ctx.input(|input| {
             let command = input.modifiers.command;
@@ -628,6 +659,30 @@ impl eframe::App for SowzAeApp {
                 ui.add(egui::DragValue::new(&mut self.transform_draft.rotation_degrees).speed(0.5).prefix("Rotation "));
                 ui.add(egui::Slider::new(&mut self.transform_draft.opacity, 0.0..=1.0).text("Opacity"));
                 if ui.button("Apply Properties").clicked() { self.apply_inspector(); }
+                ui.separator();
+                ui.label("Animation keyframes");
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("K Position X").clicked() { self.add_numeric_keyframe("position_x"); }
+                    if ui.button("K Position Y").clicked() { self.add_numeric_keyframe("position_y"); }
+                    if ui.button("K Scale X").clicked() { self.add_numeric_keyframe("scale_x"); }
+                    if ui.button("K Scale Y").clicked() { self.add_numeric_keyframe("scale_y"); }
+                    if ui.button("K Rotation").clicked() { self.add_numeric_keyframe("rotation_degrees"); }
+                    if ui.button("K Opacity").clicked() { self.add_numeric_keyframe("opacity"); }
+                });
+                if layer.keyframes.is_empty() {
+                    ui.label(egui::RichText::new("No keyframes on this layer").weak());
+                } else {
+                    egui::ScrollArea::vertical().max_height(105.0).show(ui, |ui| {
+                        for keyframe in &layer.keyframes {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("f{}  {} = {:?}", keyframe.frame, keyframe.property, keyframe.value));
+                                if ui.small_button("×").clicked() {
+                                    self.execute(Command::RemoveKeyframe { layer_id: layer.id, keyframe_id: keyframe.id });
+                                }
+                            });
+                        }
+                    });
+                }
                 ui.separator();
                 ui.label("Layer operations");
                 ui.horizontal_wrapped(|ui| {
