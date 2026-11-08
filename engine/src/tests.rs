@@ -242,3 +242,64 @@ fn reorder_layer_changes_track_order_and_is_undoable() {
         .iter().map(|layer| layer.id).collect::<Vec<_>>();
     assert_eq!(restored, original_ids);
 }
+
+
+#[test]
+fn layer_clipboard_round_trips_and_pastes_with_fresh_identifiers() {
+    let mut engine = EditorEngine::new(project()).expect("valid test project");
+    engine.execute(Command::AddLayer {
+        composition_id: 2,
+        track_id: 3,
+        name: "Clipboard title".to_owned(),
+        kind: LayerKind::Text,
+        asset_id: None,
+        start_frame: 5,
+        duration_frames: 80,
+    }).expect("layer should be added");
+    let layer_id = engine.project().compositions[0].tracks[0].layers[0].id;
+    engine.execute(Command::AddEffect {
+        layer_id,
+        effect_type: "SOWZ Glow".to_owned(),
+    }).expect("effect should be added");
+    engine.execute(Command::PutKeyframe {
+        layer_id,
+        frame: 30,
+        property: "opacity".to_owned(),
+        value: PropertyValue::Number(0.65),
+        interpolation: Interpolation::Bezier,
+    }).expect("keyframe should be added");
+
+    let clipboard = engine.copy_layer(layer_id).expect("layer should copy");
+    let encoded = clipboard.encode().expect("clipboard should encode");
+    let decoded = crate::LayerClipboard::decode(&encoded).expect("clipboard should decode");
+    engine.paste_layer(2, 3, decoded, 150).expect("layer should paste");
+
+    let layers = &engine.project().compositions[0].tracks[0].layers;
+    assert_eq!(layers.len(), 2);
+    assert_eq!(layers[1].start_frame, 150);
+    assert_ne!(layers[0].id, layers[1].id);
+    assert_ne!(layers[0].effects[0].id, layers[1].effects[0].id);
+    assert_ne!(layers[0].keyframes[0].id, layers[1].keyframes[0].id);
+    assert_eq!(layers[0].keyframes[0].value, layers[1].keyframes[0].value);
+}
+
+#[test]
+fn clipboard_rejects_unknown_schema_and_oversized_payloads() {
+    let layer = crate::Layer {
+        id: 1,
+        name: "Clipboard".to_owned(),
+        kind: LayerKind::Text,
+        start_frame: 0,
+        duration_frames: 10,
+        asset_id: None,
+        enabled: true,
+        transform: crate::Transform::default(),
+        effects: Vec::new(),
+        keyframes: Vec::new(),
+    };
+    let mut clipboard = crate::LayerClipboard::new(&layer);
+    clipboard.schema_version = 999;
+    let bytes = serde_json::to_vec(&clipboard).expect("test fixture should encode");
+    assert!(crate::LayerClipboard::decode(&bytes).is_err());
+    assert!(crate::LayerClipboard::decode(&vec![0; crate::LayerClipboard::MAX_BYTES + 1]).is_err());
+}
