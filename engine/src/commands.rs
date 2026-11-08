@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::model::{
-    Effect, Interpolation, Keyframe, Layer, LayerClipboard, LayerKind, ParameterValue, Project,
+    Asset, AssetKind, AssetSource, Effect, Interpolation, Keyframe, Layer, LayerClipboard, LayerKind, ParameterValue, Project,
     ProjectError, PropertyValue, Track, TrackKind, Transform,
 };
 
@@ -10,6 +10,7 @@ const MAX_HISTORY: usize = 100;
 #[derive(Clone, Debug)]
 pub enum Command {
     AddTrack { composition_id: u64, name: String, kind: TrackKind },
+    AddAsset { name: String, kind: AssetKind, source: AssetSource },
     AddLayer {
         composition_id: u64,
         track_id: u64,
@@ -137,6 +138,10 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
             composition.tracks.push(Track {
                 id, name, kind, muted: false, locked: false, visible: true, layers: Vec::new(),
             });
+        }
+        Command::AddAsset { name, kind, source } => {
+            let id = project.allocate_id()?;
+            project.assets.push(Asset { id, name, kind, source });
         }
         Command::AddLayer {
             composition_id, track_id, name, kind, asset_id, start_frame, duration_frames,
