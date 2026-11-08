@@ -192,3 +192,10 @@ Official references:
 - Channel mixing processor: https://developer.android.com/reference/androidx/media3/common/audio/ChannelMixingAudioProcessor
 - Gain processor: https://developer.android.com/reference/androidx/media3/common/audio/GainProcessor
 - Default gain provider: https://developer.android.com/reference/androidx/media3/common/audio/DefaultGainProvider
+
+
+## 9. Source-audio mix control in SOWZ 1.1.0
+
+The editor now applies a separately saved source-video audio gain to each video sequence item, so users can lower or mute original clip audio while keeping the separate background music track. A gain of zero mutes the source audio; one is full gain. The same Media3 PCM16/stereo conversion chain is applied before mixing.
+
+This remains a project-level source-audio control, not yet a per-clip volume envelope or a complete multi-track audio mixer. The live viewer also does not yet reflect the export mix.

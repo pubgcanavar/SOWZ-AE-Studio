@@ -22,6 +22,14 @@ class AudioTrackSettingsTest {
         assertThrows(IllegalArgumentException::class.java) { AudioTrackSettings(1.1f) }
     }
 
+    @Test fun fullGainKeepsOriginalVideoAudioAtOneHundredPercent() {
+        assertEquals(100, AudioTrackSettings(1f).percentage)
+    }
+
+    @Test fun zeroGainMutesTheTrack() {
+        assertEquals(0, AudioTrackSettings(0f).percentage)
+    }
+
     @Test fun nonFiniteGainIsRejected() {
         assertThrows(IllegalArgumentException::class.java) { AudioTrackSettings(Float.NaN) }
     }

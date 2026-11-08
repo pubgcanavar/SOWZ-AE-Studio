@@ -90,6 +90,7 @@ class EditorActivity : Activity() {
     private var sourceUri: Uri? = null
     private var backgroundAudioUri: Uri? = null
     private var backgroundAudioSettings = AudioTrackSettings()
+    private var sourceAudioSettings = AudioTrackSettings(gain = 1f)
     private val additionalClipUris = mutableListOf<Uri>()
     // Kept index-aligned with additionalClipUris; duplicated source URIs can have different trim ranges.
     private val additionalClipTrims = mutableListOf<ClipTrimRange>()
@@ -123,6 +124,8 @@ class EditorActivity : Activity() {
     private lateinit var clipQueueControls: LinearLayout
     private lateinit var undoQueueButton: TextView
     private lateinit var redoQueueButton: TextView
+    private lateinit var sourceAudioGainSummary: TextView
+    private lateinit var sourceAudioGainSeek: SeekBar
     private lateinit var backgroundAudioSummary: TextView
     private lateinit var backgroundAudioGainSummary: TextView
     private lateinit var backgroundAudioGainSeek: SeekBar
@@ -380,7 +383,24 @@ class EditorActivity : Activity() {
 
         val audioPanel = panel()
         add(audioPanel, label("Background audio · separate track"))
-        add(audioPanel, body("Add a music or sound track over the video. It is mixed into MP4 export and loops to the video length. The live viewer does not mix this track yet.", 12f, muted), top = 5)
+        add(audioPanel, body("Balance the original clip sound against the added music. These mix controls affect MP4 export; the live viewer still previews the source clip without the extra track.", 12f, muted), top = 5)
+        add(audioPanel, label("Original video audio"), top = 10)
+        sourceAudioGainSeek = SeekBar(this).apply {
+            max = 100
+            progress = sourceAudioSettings.percentage
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    sourceAudioSettings = sourceAudioSettings.copy(gain = progress / 100f)
+                    refreshSourceAudioControls()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(audioPanel, sourceAudioGainSeek)
+        sourceAudioGainSummary = body("100% · original audio", 11f, accent, true)
+        add(audioPanel, sourceAudioGainSummary, top = 4)
         backgroundAudioSummary = body("No background audio selected", 13f, white, true)
         add(audioPanel, backgroundAudioSummary, top = 9)
         add(audioPanel, button("＋  Import audio track") { pickBackgroundAudio() }, top = 10)
@@ -407,6 +427,7 @@ class EditorActivity : Activity() {
             status.text = "Background audio removed from the project."
             status.setTextColor(muted)
         }, top = 8)
+        refreshSourceAudioControls()
         refreshBackgroundAudioControls()
         add(content, audioPanel, bottom = 13)
 
@@ -920,6 +941,23 @@ class EditorActivity : Activity() {
         toast("Background audio added to the export composition.")
     }
 
+    private fun refreshSourceAudioControls() {
+        if (::sourceAudioGainSeek.isInitialized) {
+            val expected = sourceAudioSettings.percentage
+            if (sourceAudioGainSeek.progress != expected) {
+                sourceAudioGainSeek.progress = expected
+            }
+        }
+        if (::sourceAudioGainSummary.isInitialized) {
+            val percentage = sourceAudioSettings.percentage
+            sourceAudioGainSummary.text = if (percentage == 0) {
+                "Muted · original clip audio"
+            } else {
+                percentage.toString() + "% · original audio"
+            }
+        }
+    }
+
     private fun refreshBackgroundAudioControls() {
         if (::backgroundAudioSummary.isInitialized) {
             val uri = backgroundAudioUri
@@ -984,6 +1022,7 @@ class EditorActivity : Activity() {
                 .put("cubeLutTitle", selectedCubeLut?.title)
                 .put("backgroundAudioUri", backgroundAudioUri?.toString())
                 .put("backgroundAudioGain", backgroundAudioSettings.gain.toDouble())
+                .put("sourceAudioGain", sourceAudioSettings.gain.toDouble())
                 .put("additionalClipUris", org.json.JSONArray().apply {
                     additionalClipUris.forEachIndexed { index, uri ->
                         val trim = additionalClipTrims.getOrElse(index) { ClipTrimRange() }
@@ -994,7 +1033,7 @@ class EditorActivity : Activity() {
                     }
                 })
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 1.0.0")
+                .put("createdWith", "SOWZ AE Studio 1.1.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
@@ -1062,6 +1101,11 @@ class EditorActivity : Activity() {
             backgroundAudioSettings = AudioTrackSettings(
                 gain = if (savedGain.isFinite()) savedGain.coerceIn(0f, 1f) else 0.70f
             )
+            val savedSourceGain = document.optDouble("sourceAudioGain", 1.0).toFloat()
+            sourceAudioSettings = AudioTrackSettings(
+                gain = if (savedSourceGain.isFinite()) savedSourceGain.coerceIn(0f, 1f) else 1f
+            )
+            refreshSourceAudioControls()
             refreshBackgroundAudioControls()
             selectedCubeLut = null
             selectedCubeLutUri = null
@@ -1505,7 +1549,7 @@ class EditorActivity : Activity() {
             )
             .build()
         val editedItem = EditedMediaItem.Builder(clippedItem)
-            .setEffects(Effects(buildAudioProcessors(), buildVideoEffects()))
+            .setEffects(Effects(buildAudioProcessors(sourceAudioSettings.gain), buildVideoEffects()))
             .build()
         val sequenceItems = mutableListOf(editedItem)
         additionalClipUris.forEachIndexed { index, clipUri ->
@@ -1521,7 +1565,7 @@ class EditorActivity : Activity() {
                 .build()
             sequenceItems.add(
                 EditedMediaItem.Builder(clipItem)
-                    .setEffects(Effects(buildAudioProcessors(), buildVideoEffects()))
+                    .setEffects(Effects(buildAudioProcessors(sourceAudioSettings.gain), buildVideoEffects()))
                     .build()
             )
         }

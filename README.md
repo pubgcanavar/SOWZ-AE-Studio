@@ -2,11 +2,11 @@
 
 A native Android video-editing foundation. This project now performs real local video processing; it is still not a complete After Effects or Nova Editor replacement.
 
-## Current build — 1.0.0
+## Current build — 1.1.0
 
 - **Import and preview:** pick a local video using Android's document picker and preview the main clip with Media3/ExoPlayer.
 - **Trim and sequential cut:** set IN/OUT points for the main clip, add up to 20 additional video clips, then render a sequential MP4 composition. Each added clip can be moved up/down, duplicated, removed, and assigned its own IN/OUT source range; export uses the displayed order and each clip's saved trim. Queue order and trim edits support bounded Undo/Redo.
-- **Separate background audio:** import one music/sound file, set its export gain, and loop it as an independent Media3 audio sequence over the video. The project stores the audio URI and gain.
+- **Audio mixer:** independently control or mute original video audio, add one separate music/sound file, set its gain, and loop it as a Media3 audio sequence over the video. The project stores both volume settings and the background audio URI.
 - **Applied colour controls:** brightness and contrast adjustments; quarter-turn rotation (0°, 90°, 180°, 270°); text/title/watermark overlay.
 - **CC / 3D LUT:** import a standard `.cube` 3D colour lookup table. The LUT is applied to the main-clip preview and rendered output using Media3 `SingleColorLut`.
 - **Save/reopen projects:** the versioned `.sowzproj` file stores trim points, effects, text, LUT and source media URI references.
@@ -15,7 +15,7 @@ A native Android video-editing foundation. This project now performs real local 
 
 ## Important compatibility limits
 
-This is an incremental working editor, **not a full After Effects replacement**. Version 1.0.0 adds a looping background-audio sequence to MP4 export, alongside editable sequential clip order, per-clip export trimming and bounded queue Undo/Redo; it still does not provide a full multi-track visual compositor.
+This is an incremental working editor, **not a full After Effects replacement**. Version 1.1.0 adds a looping background-audio sequence and source-audio gain control to MP4 export, alongside editable sequential clip order, per-clip export trimming and bounded queue Undo/Redo; it still does not provide a full multi-track visual compositor.
 
 - The sequential clip queue is not yet a full multi-track timeline. The main clip has trim handles and live preview; added clips can be reordered, duplicated, removed and independently trimmed for export. The background audio track is rendered in the MP4 but is not mixed into the live viewer yet. There are no overlapping visual tracks/transitions or independent per-clip live preview.
 - The timeline/keyframe model has unit tests, but animated properties are not yet connected to a fully composited renderer/export timeline.

@@ -4,7 +4,7 @@ Updated: 2026-10-25
 
 This roadmap uses public product feature lists, official AndroidX Media3 APIs, and public/licensed file-format research. It does not use leaked private data, credentials, hidden endpoints or access-control bypasses.
 
-## Delivered foundation — 1.0.0 (editable clip queue, per-clip trims, Undo/Redo and background audio)
+## Delivered foundation — 1.1.0 (editable clip queue, per-clip trims, Undo/Redo and audio mixer)
 
 - Local source video import and main-clip playback preview.
 - IN/OUT trim handles for the main clip.
@@ -16,6 +16,7 @@ This roadmap uses public product feature lists, official AndroidX Media3 APIs, a
 - One independent background-audio sequence, imported through Android's document picker, looped to composition length and mixed into MP4 export with an adjustable linear gain.
 - The project saves/restores the background audio URI and gain while remaining compatible with older `.sowzproj` files that omit these optional fields.
 - Audio-bearing video and audio items use the same Media3 PCM16/stereo normalization chain before composition mixing.
+- Original video audio has an independent 0–100% export gain, including a true mute setting at 0%; the setting is saved and restored with the project.
 - Real brightness, contrast, quarter-turn rotation and static text/watermark overlay effects on preview and export.
 - Standard 3D `.cube` CC LUT import, parsing and application via Media3 `SingleColorLut`.
 - Save/reopen `.sowzproj` with source URI references, edit settings, text, LUT and clip queue.
@@ -27,7 +28,7 @@ This roadmap uses public product feature lists, official AndroidX Media3 APIs, a
 
 - Add background audio to the in-app CompositionPlayer preview when its API is stable enough for the supported device range; until then, preview/export parity is explicitly incomplete.
 - Add independent audio clips, per-clip IN/OUT, gain automation and audio waveform display.
-- Add original-video audio mute/gain controls and a project-level audio mixer.
+- Add multiple independently arranged audio clips, per-clip IN/OUT, gain automation and audio waveform display.
 
 ## Next milestone — independent clip editing
 
