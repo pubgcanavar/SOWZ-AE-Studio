@@ -378,3 +378,29 @@ fn linked_media_asset_can_be_added_and_referenced_by_a_layer() {
     assert_eq!(value.compositions[0].tracks[0].layers[0].asset_id, Some(asset_id));
     assert!(value.validate().is_ok());
 }
+
+
+#[test]
+fn package_rejects_missing_embedded_assets_and_round_trips_present_ones() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("embedded.sowzae");
+    let mut value = project();
+    value.assets.push(crate::Asset {
+        id: 4,
+        name: "cover.png".to_owned(),
+        kind: crate::AssetKind::Image,
+        source: crate::AssetSource::Embedded { path: "assets/images/cover.png".to_owned() },
+    });
+    value.next_id = 5;
+
+    let missing = LoadedPackage { project: value.clone(), files: BTreeMap::new() };
+    assert!(save_package(&path, &missing).is_err());
+
+    let mut files = BTreeMap::new();
+    files.insert("assets/images/cover.png".to_owned(), vec![9, 8, 7, 6]);
+    let valid = LoadedPackage { project: value.clone(), files };
+    save_package(&path, &valid).expect("embedded asset package should save");
+    let loaded = load_package(&path).expect("embedded asset package should load");
+    assert_eq!(loaded.project, value);
+    assert_eq!(loaded.files.get("assets/images/cover.png"), Some(&vec![9, 8, 7, 6]));
+}
