@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -20,11 +21,19 @@ import android.view.Gravity
 import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.media3.common.C
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.ChannelMixingAudioProcessor
+import androidx.media3.common.audio.ChannelMixingMatrix
+import androidx.media3.common.audio.DefaultGainProvider
+import androidx.media3.common.audio.GainProcessor
+import androidx.media3.common.audio.ToInt16PcmAudioProcessor
+import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.common.Effect
 import androidx.media3.transformer.Effects
 import androidx.media3.common.MediaItem
@@ -32,6 +41,8 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
+import androidx.media3.effect.HslAdjustment
+import androidx.media3.effect.GaussianBlur
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.SingleColorLut
@@ -43,10 +54,16 @@ import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.ui.PlayerView
 import com.sowz.aestudio.core.CubeLutData
 import com.sowz.aestudio.core.CubeLutParser
+import com.sowz.aestudio.core.ClipTrimRange
+import com.sowz.aestudio.core.ClipQueueSnapshot
+import com.sowz.aestudio.core.EditHistory
+import com.sowz.aestudio.core.AudioTrackSettings
+import com.sowz.aestudio.core.ColorGradeSettings
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -68,6 +85,7 @@ class EditorActivity : Activity() {
         const val REQUEST_ADD_CLIPS = 2105
         const val REQUEST_IMPORT_LUT = 2106
         const val REQUEST_IMPORT_FFX = 2107
+        const val REQUEST_IMPORT_AUDIO = 2108
         const val SCALE_MAX = 1000
         const val MIN_CLIP_MS = 500L
     }
@@ -76,7 +94,14 @@ class EditorActivity : Activity() {
     private var player: ExoPlayer? = null
     private var transformer: Transformer? = null
     private var sourceUri: Uri? = null
+    private var backgroundAudioUri: Uri? = null
+    private var backgroundAudioSettings = AudioTrackSettings()
+    private var sourceAudioSettings = AudioTrackSettings(gain = 1f)
     private val additionalClipUris = mutableListOf<Uri>()
+    // Kept index-aligned with additionalClipUris; every queued entry owns trim and speed settings.
+    private val additionalClipTrims = mutableListOf<ClipTrimRange>()
+    private val additionalClipSpeeds = mutableListOf<Float>()
+    private val clipQueueHistory = EditHistory(ClipQueueSnapshot(emptyList(), emptyList()))
     private var pendingExportUri: Uri? = null
     private var temporaryOutput: File? = null
     private var durationMs = 0L
@@ -86,6 +111,9 @@ class EditorActivity : Activity() {
     private var restoreEndMs: Long? = null
     private var brightnessValue = 0f
     private var contrastValue = 0f
+    private var colorGrade = ColorGradeSettings()
+    private var blurSigma = 0f
+    private var mainClipSpeed = 1f
     private var rotationDegrees = 0
     private var overlayText = ""
     private var selectedCubeLut: CubeLutData? = null
@@ -103,15 +131,54 @@ class EditorActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var trimSummary: TextView
     private lateinit var clipQueueSummary: TextView
-    private lateinit var removeLastClipButton: TextView
+    private lateinit var clipQueueControls: LinearLayout
+    private lateinit var undoQueueButton: TextView
+    private lateinit var redoQueueButton: TextView
+    private lateinit var sourceAudioGainSummary: TextView
+    private lateinit var sourceAudioGainSeek: SeekBar
+    private lateinit var backgroundAudioSummary: TextView
+    private lateinit var backgroundAudioGainSummary: TextView
+    private lateinit var backgroundAudioGainSeek: SeekBar
     private lateinit var brightnessSeek: SeekBar
     private lateinit var contrastSeek: SeekBar
+    private lateinit var hueSeek: SeekBar
+    private lateinit var saturationSeek: SeekBar
+    private lateinit var lightnessSeek: SeekBar
+    private lateinit var blurSeek: SeekBar
+    private lateinit var mainSpeedSeek: SeekBar
+    private lateinit var speedSummary: TextView
     private lateinit var effectSummary: TextView
     private lateinit var lutSummary: TextView
     private lateinit var rotationSummary: TextView
     private val rotationButtons = mutableMapOf<Int, TextView>()
     private lateinit var textOverlaySummary: TextView
+    private lateinit var exportProgressBar: ProgressBar
     private lateinit var exportButton: TextView
+
+    private val exportProgressHolder = ProgressHolder()
+    private val syncExportProgress = object : Runnable {
+        override fun run() {
+            val active = transformer ?: return
+            try {
+                val state = active.getProgress(exportProgressHolder)
+                if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                    val percent = exportProgressHolder.progress.coerceIn(0, 100)
+                    if (::exportProgressBar.isInitialized) {
+                        exportProgressBar.progress = percent
+                        exportProgressBar.visibility = View.VISIBLE
+                    }
+                    if (::status.isInitialized && !exportButton.isEnabled) {
+                        status.text = "Rendering " + percent + "% · " + exportClipCount + " clip(s)"
+                    }
+                }
+                if (state != Transformer.PROGRESS_STATE_NOT_STARTED) {
+                    handler.postDelayed(this, 500L)
+                }
+            } catch (_: Exception) {
+                // Completion/error callbacks remain authoritative.
+            }
+        }
+    }
 
     private val syncPlayback = object : Runnable {
         override fun run() {
@@ -157,6 +224,7 @@ class EditorActivity : Activity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(syncPlayback)
+        handler.removeCallbacks(syncExportProgress)
         transformer?.cancel()
         playerView.player = null
         player?.release()
@@ -338,23 +406,77 @@ class EditorActivity : Activity() {
 
         val timelinePanel = panel()
         add(timelinePanel, label("Timeline sequence"))
-        add(timelinePanel, body("The main clip plays first. Add videos to play after it in order; the selected trim range applies to the main clip and added clips use their full duration.", 12f, muted), top = 5)
+        add(timelinePanel, body("Manage every queued clip: move it, duplicate it, or remove it. Export follows this order. The trim handles still apply to the main clip; added clips use their full duration.", 12f, muted), top = 5)
         clipQueueSummary = body("Main clip: none", 13f, white, true)
         add(timelinePanel, clipQueueSummary, top = 9)
-        add(timelinePanel, button("＋  Add videos to final cut") { pickAdditionalClips() }, top = 10)
-        removeLastClipButton = button("Remove last added clip", secondary = true) {
-            if (additionalClipUris.isNotEmpty()) {
-                additionalClipUris.removeAt(additionalClipUris.lastIndex)
-                refreshClipQueueSummary()
-            }
+        clipQueueControls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        add(timelinePanel, clipQueueControls, top = 8)
+        val historyRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        add(timelinePanel, removeLastClipButton, top = 8)
+        undoQueueButton = button("↶  Undo", secondary = true) { undoQueueEdit() }
+        redoQueueButton = button("↷  Redo", secondary = true) { redoQueueEdit() }
+        historyRow.addView(undoQueueButton, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6f) })
+        historyRow.addView(redoQueueButton, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6f) })
+        add(timelinePanel, historyRow, top = 8)
+        add(timelinePanel, button("＋  Add videos to final cut") { pickAdditionalClips() }, top = 10)
         refreshClipQueueSummary()
         add(content, timelinePanel, bottom = 13)
 
+        val audioPanel = panel()
+        add(audioPanel, label("Background audio · separate track"))
+        add(audioPanel, body("Balance the original clip sound against the added music. These mix controls affect MP4 export; the live viewer still previews the source clip without the extra track.", 12f, muted), top = 5)
+        add(audioPanel, label("Original video audio"), top = 10)
+        sourceAudioGainSeek = SeekBar(this).apply {
+            max = 100
+            progress = sourceAudioSettings.percentage
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    sourceAudioSettings = sourceAudioSettings.copy(gain = progress / 100f)
+                    refreshSourceAudioControls()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(audioPanel, sourceAudioGainSeek)
+        sourceAudioGainSummary = body("100% · original audio", 11f, accent, true)
+        add(audioPanel, sourceAudioGainSummary, top = 4)
+        backgroundAudioSummary = body("No background audio selected", 13f, white, true)
+        add(audioPanel, backgroundAudioSummary, top = 9)
+        add(audioPanel, button("＋  Import audio track") { pickBackgroundAudio() }, top = 10)
+        add(audioPanel, label("Music volume"), top = 12)
+        backgroundAudioGainSeek = SeekBar(this).apply {
+            max = 100
+            progress = backgroundAudioSettings.percentage
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    backgroundAudioSettings = backgroundAudioSettings.copy(gain = progress / 100f)
+                    refreshBackgroundAudioControls()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(audioPanel, backgroundAudioGainSeek)
+        backgroundAudioGainSummary = body("70% volume", 11f, accent, true)
+        add(audioPanel, backgroundAudioGainSummary, top = 4)
+        add(audioPanel, button("Remove background audio", secondary = true) {
+            backgroundAudioUri = null
+            refreshBackgroundAudioControls()
+            status.text = "Background audio removed from the project."
+            status.setTextColor(muted)
+        }, top = 8)
+        refreshSourceAudioControls()
+        refreshBackgroundAudioControls()
+        add(content, audioPanel, bottom = 13)
+
         val effectsPanel = panel()
         add(effectsPanel, label("Color effects"))
-        add(effectsPanel, body("Brightness and contrast run on the exported frames and are previewed with the same Media3 effects.", 12f, muted), top = 5)
+        add(effectsPanel, body("Live preview and MP4 export share the same native GPU colour effects.", 12f, muted), top = 5)
         add(effectsPanel, label("Brightness"), top = 12)
         brightnessSeek = SeekBar(this).apply {
             max = 200
@@ -381,12 +503,92 @@ class EditorActivity : Activity() {
             })
         }
         add(effectsPanel, contrastSeek)
-        effectSummary = body("Brightness 0.00  ·  Contrast 0.00", 12f, accent, true)
+        add(effectsPanel, label("Hue · -180° to +180°"), top = 8)
+        hueSeek = SeekBar(this).apply {
+            max = 360
+            progress = 180
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateColorValues()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, hueSeek)
+        add(effectsPanel, label("Saturation · -100 to +100"), top = 5)
+        saturationSeek = SeekBar(this).apply {
+            max = 200
+            progress = 100
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateColorValues()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, saturationSeek)
+        add(effectsPanel, label("Lightness · -100 to +100"), top = 5)
+        lightnessSeek = SeekBar(this).apply {
+            max = 200
+            progress = 100
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateColorValues()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, lightnessSeek)
+        add(effectsPanel, label("Gaussian Blur · 0 to 40"), top = 7)
+        blurSeek = SeekBar(this).apply {
+            max = 100
+            progress = 0
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    blurSigma = if (progress < 2) 0f else (progress / 100f) * 40f
+                    player?.setVideoEffects(buildVideoEffects())
+                    effectSummary.text = buildEffectSummary()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, blurSeek)
+        add(effectsPanel, label("Main clip speed · 0.25x to 4x"), top = 7)
+        mainSpeedSeek = SeekBar(this).apply {
+            max = 100
+            progress = 20
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateMainSpeedFromSeek()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, mainSpeedSeek)
+        speedSummary = body("Main clip speed · 1x", 11f, muted, true)
+        add(effectsPanel, speedSummary, top = 4)
+        effectSummary = body("Brightness 0.00 · Contrast 0.00\nHue 0° · Saturation 0 · Lightness 0\nBlur 0", 12f, accent, true)
         add(effectsPanel, effectSummary, top = 7)
         add(effectsPanel, button("Reset color controls", secondary = true) {
             brightnessSeek.progress = 100
             contrastSeek.progress = 100
+            hueSeek.progress = 180
+            saturationSeek.progress = 100
+            lightnessSeek.progress = 100
+            blurSeek.progress = 0
+            mainSpeedSeek.progress = 20
+            blurSigma = 0f
+            mainClipSpeed = 1f
+            player?.setPlaybackSpeed(1f)
             updateColorValues()
+            speedSummary.text = "Main clip speed · 1x"
+            speedSummary.setTextColor(muted)
         }, top = 9)
         add(content, effectsPanel, bottom = 13)
 
@@ -450,6 +652,12 @@ class EditorActivity : Activity() {
         add(exportPanel, button("Save project (.sowzproj)", secondary = true) { startProjectSavePicker() }, top = 10)
         status = body("Ready when a video is imported.", 12f, green)
         add(exportPanel, status, top = 11)
+        exportProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 0
+            visibility = View.GONE
+        }
+        add(exportPanel, exportProgressBar, top = 9)
         exportButton = button("Export trimmed MP4") { startExportPicker() }
         add(exportPanel, exportButton, top = 10)
         add(exportPanel, button("Cancel export", secondary = true) { cancelExport() }, top = 8)
@@ -465,7 +673,18 @@ class EditorActivity : Activity() {
         restoreStartMs = null
         restoreEndMs = null
         additionalClipUris.clear()
+        additionalClipTrims.clear()
+        additionalClipSpeeds.clear()
+        blurSigma = 0f
+        mainClipSpeed = 1f
+        resetQueueHistory()
         refreshClipQueueSummary()
+        if (::blurSeek.isInitialized) blurSeek.progress = 0
+        if (::mainSpeedSeek.isInitialized) mainSpeedSeek.progress = 20
+        if (::speedSummary.isInitialized) {
+            speedSummary.text = "Main clip speed · 1x"
+            speedSummary.setTextColor(muted)
+        }
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "video/*"
@@ -510,31 +729,324 @@ class EditorActivity : Activity() {
                 // Some providers only issue temporary grants; the current session may still read them.
             }
             additionalClipUris.add(uri)
+            additionalClipTrims.add(ClipTrimRange())
+            additionalClipSpeeds.add(1f)
             added++
         }
+        if (added > 0) recordQueueEdit()
         refreshClipQueueSummary()
         toast(if (added > 0) "Added $added clip(s) to the final cut." else "No new clips were added.")
     }
 
+    private fun clipTrimLabel(range: ClipTrimRange): String =
+        if (range.startMs == 0L && range.endMs == null) {
+            "Full source · no trim"
+        } else {
+            "IN " + formatTime(range.startMs) + " · OUT " +
+                (range.endMs?.let { formatTime(it) } ?: "source end")
+        }
+
+    private fun editAdditionalClipTrim(index: Int) {
+        val uri = additionalClipUris.getOrNull(index) ?: return
+        status.text = "Reading source duration for " + queryDisplayName(uri) + "…"
+        status.setTextColor(accent)
+        Thread {
+            val duration = try {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(this, uri)
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                        ?: error("The provider did not report a readable video duration.")
+                } finally {
+                    retriever.release()
+                }
+            } catch (error: Exception) {
+                error
+            }
+            handler.post {
+                if (index !in additionalClipUris.indices || additionalClipUris[index] != uri) return@post
+                if (duration is Exception) {
+                    status.text = "Cannot read clip duration: " + (duration.message ?: "unsupported media")
+                    status.setTextColor(accent)
+                    toast("Could not read this clip's duration.")
+                    return@post
+                }
+                showAdditionalClipTrimDialog(index, (duration as Long).coerceAtLeast(1L))
+            }
+        }.start()
+    }
+
+    private fun showAdditionalClipTrimDialog(index: Int, sourceDurationMs: Long) {
+        val existing = additionalClipTrims.getOrElse(index) { ClipTrimRange() }
+        val safeRange = try {
+            existing.clampToDuration(sourceDurationMs)
+        } catch (_: IllegalArgumentException) {
+            ClipTrimRange()
+        }
+        val inputPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18f), dp(8f), dp(18f), 0)
+        }
+        val inField = EditText(this).apply {
+            hint = "IN point in seconds"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setSingleLine(true)
+            setText(String.format(Locale.ROOT, "%.3f", safeRange.startMs / 1000.0))
+        }
+        val outField = EditText(this).apply {
+            hint = "OUT point in seconds"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setSingleLine(true)
+            setText(String.format(Locale.ROOT, "%.3f", (safeRange.endMs ?: sourceDurationMs) / 1000.0))
+        }
+        inputPanel.addView(body("Source duration: " + formatTime(sourceDurationMs), 12f, muted))
+        inputPanel.addView(body("IN point (seconds)", 11f, muted), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10f) })
+        inputPanel.addView(inField)
+        inputPanel.addView(body("OUT point (seconds)", 11f, muted), LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
+        inputPanel.addView(outField)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Trim · " + queryDisplayName(additionalClipUris[index]))
+            .setMessage("Set an independent source range for this clip. The values are seconds; the original file stays unchanged.")
+            .setView(inputPanel)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Apply", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val startSeconds = inField.text.toString().trim().toDoubleOrNull()
+                val endSeconds = outField.text.toString().trim().toDoubleOrNull()
+                if (startSeconds == null || endSeconds == null ||
+                    !startSeconds.isFinite() || !endSeconds.isFinite() ||
+                    startSeconds < 0.0 || endSeconds <= startSeconds ||
+                    endSeconds * 1000.0 > sourceDurationMs.toDouble()
+                ) {
+                    inField.error = "Use a valid IN value."
+                    outField.error = "OUT must be after IN and within the source duration."
+                    return@setOnClickListener
+                }
+                val startMs = (startSeconds * 1000.0).toLong()
+                val endMs = (endSeconds * 1000.0).toLong()
+                try {
+                    additionalClipTrims[index] = ClipTrimRange(startMs, endMs).clampToDuration(sourceDurationMs)
+                    recordQueueEdit()
+                } catch (error: IllegalArgumentException) {
+                    outField.error = error.message
+                    return@setOnClickListener
+                }
+                refreshClipQueueSummary()
+                status.text = "Clip trim applied · " + formatTime(startMs) + "–" + formatTime(endMs)
+                status.setTextColor(green)
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun editAdditionalClipSpeed(index: Int) {
+        if (index !in additionalClipUris.indices) return
+        val existing = additionalClipSpeeds.getOrElse(index) { 1f }
+        val values = floatArrayOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f, 4f)
+        val labels = values.map { formatSpeed(it) }.toTypedArray()
+        val selected = values.indexOfFirst { kotlin.math.abs(it - existing) < 0.001f }.coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("Speed · " + queryDisplayName(additionalClipUris[index]))
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                additionalClipSpeeds[index] = values[which]
+                recordQueueEdit()
+                refreshClipQueueSummary()
+                status.text = "Clip speed set to " + formatSpeed(values[which]) + "."
+                status.setTextColor(if (values[which] == 1f) muted else green)
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun currentQueueSnapshot(): ClipQueueSnapshot =
+        ClipQueueSnapshot(
+            uriStrings = additionalClipUris.map { it.toString() },
+            trims = additionalClipTrims.toList(),
+            speeds = additionalClipSpeeds.let {
+                if (it.size == additionalClipUris.size) it.toList() else List(additionalClipUris.size) { 1f }
+            }
+        )
+
+    private fun recordQueueEdit() {
+        clipQueueHistory.commit(currentQueueSnapshot())
+        refreshQueueHistoryButtons()
+    }
+
+    private fun resetQueueHistory() {
+        clipQueueHistory.reset(currentQueueSnapshot())
+        refreshQueueHistoryButtons()
+    }
+
+    private fun restoreQueueSnapshot(snapshot: ClipQueueSnapshot) {
+        additionalClipUris.clear()
+        snapshot.uriStrings.forEach { additionalClipUris.add(Uri.parse(it)) }
+        additionalClipTrims.clear()
+        additionalClipTrims.addAll(snapshot.trims)
+        additionalClipSpeeds.clear()
+        additionalClipSpeeds.addAll(snapshot.speeds)
+        while (additionalClipSpeeds.size < additionalClipUris.size) additionalClipSpeeds.add(1f)
+        refreshClipQueueSummary()
+    }
+
+    private fun undoQueueEdit() {
+        val snapshot = clipQueueHistory.undo()
+        if (snapshot == null) {
+            toast("Nothing to undo.")
+            return
+        }
+        restoreQueueSnapshot(snapshot)
+        refreshQueueHistoryButtons()
+        status.text = "Undo completed."
+        status.setTextColor(muted)
+    }
+
+    private fun redoQueueEdit() {
+        val snapshot = clipQueueHistory.redo()
+        if (snapshot == null) {
+            toast("Nothing to redo.")
+            return
+        }
+        restoreQueueSnapshot(snapshot)
+        refreshQueueHistoryButtons()
+        status.text = "Redo completed."
+        status.setTextColor(green)
+    }
+
+    private fun refreshQueueHistoryButtons() {
+        if (!::undoQueueButton.isInitialized || !::redoQueueButton.isInitialized) return
+        undoQueueButton.isEnabled = clipQueueHistory.canUndo
+        undoQueueButton.alpha = if (clipQueueHistory.canUndo) 1f else 0.42f
+        redoQueueButton.isEnabled = clipQueueHistory.canRedo
+        redoQueueButton.alpha = if (clipQueueHistory.canRedo) 1f else 0.42f
+    }
+
     private fun refreshClipQueueSummary() {
-        if (!::clipQueueSummary.isInitialized) return
+        if (!::clipQueueSummary.isInitialized || !::clipQueueControls.isInitialized) return
         val mainName = if (::sourceLabel.isInitialized && sourceLabel.text.isNotBlank()) {
             sourceLabel.text.toString()
         } else "Main clip"
-        val shownNames = additionalClipUris.take(4).map { queryDisplayName(it) }
-        val more = additionalClipUris.size - shownNames.size
-        clipQueueSummary.text = buildString {
-            append("01  ").append(mainName)
-            shownNames.forEachIndexed { index, name ->
-                append("\n").append(String.format(Locale.ROOT, "%02d", index + 2)).append("  ").append(name)
+        clipQueueSummary.text = "01  " + mainName + "\n" +
+            (additionalClipUris.size + 1) + " clip(s) in export sequence"
+        clipQueueControls.removeAllViews()
+
+        if (additionalClipUris.isEmpty()) {
+            clipQueueControls.addView(body("No added clips yet. Import videos to build your sequence.", 11f, muted))
+            refreshQueueHistoryButtons()
+            return
+        }
+
+        additionalClipUris.forEachIndexed { index, uri ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(9f), dp(7f), dp(7f), dp(7f))
+                background = rounded(surface2, 12f, border)
             }
-            if (more > 0) append("\n… and ").append(more).append(" more")
-            append("\nTotal clips: ").append(1 + additionalClipUris.size)
+            val info = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            info.addView(body("CLIP " + String.format(Locale.ROOT, "%02d", index + 2), 9.5f, accent, true))
+            info.addView(body(queryDisplayName(uri), 12f, white, true))
+            info.addView(body(clipTrimLabel(additionalClipTrims.getOrElse(index) { ClipTrimRange() }), 10f, muted))
+            val clipSpeed = additionalClipSpeeds.getOrElse(index) { 1f }
+            info.addView(body(formatSpeed(clipSpeed) + " speed", 10f, if (clipSpeed == 1f) muted else accent, true))
+            row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
+
+            fun addAction(glyph: String, hint: String, enabled: Boolean, action: () -> Unit) {
+                row.addView(
+                    queueAction(glyph, hint, enabled, action),
+                    LinearLayout.LayoutParams(dp(38f), dp(38f)).apply { marginStart = dp(4f) }
+                )
+            }
+            addAction("✂", "Edit clip IN/OUT points", true) { editAdditionalClipTrim(index) }
+            addAction("▶", "Edit clip speed", true) { editAdditionalClipSpeed(index) }
+            addAction("↑", "Move clip up", index > 0) { moveAdditionalClip(index, -1) }
+            addAction("↓", "Move clip down", index < additionalClipUris.lastIndex) { moveAdditionalClip(index, 1) }
+            addAction("+", "Duplicate clip", additionalClipUris.size < 20) { duplicateAdditionalClip(index) }
+            addAction("×", "Remove clip", true) { confirmRemoveAdditionalClip(index) }
+
+            clipQueueControls.addView(
+                row,
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6f) }
+            )
         }
-        if (::removeLastClipButton.isInitialized) {
-            removeLastClipButton.isEnabled = additionalClipUris.isNotEmpty()
-            removeLastClipButton.alpha = if (additionalClipUris.isNotEmpty()) 1f else 0.45f
+        refreshQueueHistoryButtons()
+    }
+
+    private fun queueAction(glyph: String, hint: String, enabled: Boolean, action: () -> Unit): TextView =
+        body(glyph, 17f, if (enabled) white else muted, true).apply {
+            gravity = Gravity.CENTER
+            minWidth = dp(38f)
+            minHeight = dp(38f)
+            setPadding(dp(3f), dp(3f), dp(3f), dp(3f))
+            background = rounded(if (enabled) surface else bg, 10f, border)
+            contentDescription = hint
+            isClickable = enabled
+            isFocusable = enabled
+            alpha = if (enabled) 1f else 0.38f
+            setOnClickListener { if (enabled) action() }
         }
+
+    private fun moveAdditionalClip(index: Int, offset: Int) {
+        val target = index + offset
+        if (index !in additionalClipUris.indices || target !in additionalClipUris.indices) return
+        val reordered = com.sowz.aestudio.core.ClipQueueOperations.move(additionalClipUris, index, target)
+        val reorderedTrims = com.sowz.aestudio.core.ClipQueueOperations.move(additionalClipTrims, index, target)
+        val reorderedSpeeds = com.sowz.aestudio.core.ClipQueueOperations.move(additionalClipSpeeds, index, target)
+        additionalClipUris.clear()
+        additionalClipUris.addAll(reordered)
+        additionalClipTrims.clear()
+        additionalClipTrims.addAll(reorderedTrims)
+        additionalClipSpeeds.clear()
+        additionalClipSpeeds.addAll(reorderedSpeeds)
+        recordQueueEdit()
+        refreshClipQueueSummary()
+        status.text = "Clip moved. Export order updated."
+        status.setTextColor(green)
+    }
+
+    private fun duplicateAdditionalClip(index: Int) {
+        val uri = additionalClipUris.getOrNull(index) ?: return
+        if (additionalClipUris.size >= 20) {
+            toast("The project can contain up to 20 added clips.")
+            return
+        }
+        additionalClipUris.add(index + 1, uri)
+        additionalClipTrims.add(index + 1, additionalClipTrims.getOrElse(index) { ClipTrimRange() })
+        additionalClipSpeeds.add(index + 1, additionalClipSpeeds.getOrElse(index) { 1f })
+        recordQueueEdit()
+        refreshClipQueueSummary()
+        status.text = "Clip duplicated in the sequence."
+        status.setTextColor(green)
+    }
+
+    private fun confirmRemoveAdditionalClip(index: Int) {
+        val uri = additionalClipUris.getOrNull(index) ?: return
+        val name = queryDisplayName(uri)
+        AlertDialog.Builder(this)
+            .setTitle("Remove clip from sequence?")
+            .setMessage("Remove " + name + " from this project? The original media file will not be deleted.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Remove") { _, _ ->
+                val updated = com.sowz.aestudio.core.ClipQueueOperations.remove(additionalClipUris, index)
+                additionalClipUris.clear()
+                additionalClipUris.addAll(updated)
+                if (index in additionalClipTrims.indices) additionalClipTrims.removeAt(index)
+                if (index in additionalClipSpeeds.indices) additionalClipSpeeds.removeAt(index)
+                recordQueueEdit()
+                refreshClipQueueSummary()
+                status.text = "Clip removed from sequence. Source media is unchanged."
+                status.setTextColor(muted)
+            }
+            .show()
     }
 
     private fun startExportPicker() {
@@ -572,6 +1084,71 @@ class EditorActivity : Activity() {
             REQUEST_ADD_CLIPS -> addAdditionalClips(data)
             REQUEST_IMPORT_LUT -> loadCubeLut(data?.data ?: return, data.flags)
             REQUEST_IMPORT_FFX -> loadFfxPreset(data?.data ?: return, data.flags)
+            REQUEST_IMPORT_AUDIO -> loadBackgroundAudio(data?.data ?: return, data.flags)
+        }
+    }
+
+    private fun pickBackgroundAudio() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_IMPORT_AUDIO)
+    }
+
+    private fun loadBackgroundAudio(uri: Uri, flags: Int) {
+        if ((flags and Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0) {
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri, flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {
+                // Some document providers only issue temporary read grants.
+            }
+        }
+        backgroundAudioUri = uri
+        refreshBackgroundAudioControls()
+        status.text = "Background audio selected. It will be mixed during MP4 export; the live viewer still previews the video track only."
+        status.setTextColor(green)
+        toast("Background audio added to the export composition.")
+    }
+
+    private fun refreshSourceAudioControls() {
+        if (::sourceAudioGainSeek.isInitialized) {
+            val expected = sourceAudioSettings.percentage
+            if (sourceAudioGainSeek.progress != expected) {
+                sourceAudioGainSeek.progress = expected
+            }
+        }
+        if (::sourceAudioGainSummary.isInitialized) {
+            val percentage = sourceAudioSettings.percentage
+            sourceAudioGainSummary.text = if (percentage == 0) {
+                "Muted · original clip audio"
+            } else {
+                percentage.toString() + "% · original audio"
+            }
+        }
+    }
+
+    private fun refreshBackgroundAudioControls() {
+        if (::backgroundAudioSummary.isInitialized) {
+            val uri = backgroundAudioUri
+            backgroundAudioSummary.text = if (uri == null) {
+                "No background audio selected"
+            } else {
+                queryDisplayName(uri)
+            }
+            backgroundAudioSummary.setTextColor(if (uri == null) muted else white)
+        }
+        if (::backgroundAudioGainSeek.isInitialized) {
+            val expected = backgroundAudioSettings.percentage
+            if (backgroundAudioGainSeek.progress != expected) {
+                backgroundAudioGainSeek.progress = expected
+            }
+        }
+        if (::backgroundAudioGainSummary.isInitialized) {
+            backgroundAudioGainSummary.text = backgroundAudioSettings.percentage.toString() + "% volume"
         }
     }
 
@@ -612,15 +1189,30 @@ class EditorActivity : Activity() {
                 .put("trimEndMs", clipEndMs)
                 .put("brightness", brightnessValue.toDouble())
                 .put("contrast", contrastValue.toDouble())
+                .put("hueAdjustmentDegrees", colorGrade.hueAdjustmentDegrees.toDouble())
+                .put("saturationAdjustment", colorGrade.saturationAdjustment.toDouble())
+                .put("lightnessAdjustment", colorGrade.lightnessAdjustment.toDouble())
                 .put("rotationDegrees", rotationDegrees)
                 .put("textOverlay", overlayText)
                 .put("cubeLutUri", selectedCubeLutUri?.toString())
                 .put("cubeLutTitle", selectedCubeLut?.title)
+                .put("backgroundAudioUri", backgroundAudioUri?.toString())
+                .put("backgroundAudioGain", backgroundAudioSettings.gain.toDouble())
+                .put("sourceAudioGain", sourceAudioSettings.gain.toDouble())
                 .put("additionalClipUris", org.json.JSONArray().apply {
-                    additionalClipUris.forEach { put(it.toString()) }
+                    additionalClipUris.forEachIndexed { index, uri ->
+                        val trim = additionalClipTrims.getOrElse(index) { ClipTrimRange() }
+                        put(org.json.JSONObject()
+                            .put("uri", uri.toString())
+                            .put("trimStartMs", trim.startMs)
+                            .put("trimEndMs", trim.endMs ?: -1L)
+                            .put("speed", additionalClipSpeeds.getOrElse(index) { 1f }))
+                    }
                 })
+                .put("mainClipSpeed", mainClipSpeed.toDouble())
+                .put("blurSigma", blurSigma.toDouble())
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 0.6.0")
+                .put("createdWith", "SOWZ AE Studio 1.3.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
@@ -651,15 +1243,30 @@ class EditorActivity : Activity() {
             val sourceString = document.optString("sourceUri")
             if (sourceString.isBlank()) error("The project has no source media reference.")
             additionalClipUris.clear()
+            additionalClipTrims.clear()
+            additionalClipSpeeds.clear()
             val savedClips = document.optJSONArray("additionalClipUris")
             if (savedClips != null) {
                 for (index in 0 until min(savedClips.length(), 20)) {
-                    val clipValue = savedClips.optString(index)
+                    val rawClip = savedClips.opt(index)
+                    val clipObject = rawClip as? org.json.JSONObject
+                    val clipValue = if (clipObject != null) clipObject.optString("uri") else rawClip as? String ?: ""
                     if (clipValue.isBlank() || clipValue == sourceString) continue
                     val clipUri = Uri.parse(clipValue)
-                    if (clipUri !in additionalClipUris) additionalClipUris.add(clipUri)
+                    additionalClipUris.add(clipUri)
+                    val startMs = clipObject?.optLong("trimStartMs", 0L) ?: 0L
+                    val endValue = clipObject?.optLong("trimEndMs", -1L) ?: -1L
+                    val range = try {
+                        ClipTrimRange(startMs, endValue.takeIf { it > 0L })
+                    } catch (_: IllegalArgumentException) {
+                        ClipTrimRange()
+                    }
+                    val savedSpeed = clipObject?.optDouble("speed", 1.0)?.toFloat() ?: 1f
+                    additionalClipTrims.add(range)
+                    additionalClipSpeeds.add(if (savedSpeed.isFinite()) savedSpeed.coerceIn(0.25f, 4f) else 1f)
                 }
             }
+            resetQueueHistory()
             refreshClipQueueSummary()
             val start = document.optLong("trimStartMs", 0L)
             val end = document.optLong("trimEndMs", 0L)
@@ -668,8 +1275,32 @@ class EditorActivity : Activity() {
             restoreEndMs = end
             brightnessValue = document.optDouble("brightness", 0.0).toFloat().coerceIn(-1f, 1f)
             contrastValue = document.optDouble("contrast", 0.0).toFloat().coerceIn(-1f, 1f)
+            val savedHue = document.optDouble("hueAdjustmentDegrees", 0.0).toFloat()
+            val savedSaturation = document.optDouble("saturationAdjustment", 0.0).toFloat()
+            val savedLightness = document.optDouble("lightnessAdjustment", 0.0).toFloat()
+            val savedMainSpeed = document.optDouble("mainClipSpeed", 1.0).toFloat()
+            val savedBlurSigma = document.optDouble("blurSigma", 0.0).toFloat()
+            mainClipSpeed = if (savedMainSpeed.isFinite()) savedMainSpeed.coerceIn(0.25f, 4f) else 1f
+            blurSigma = if (savedBlurSigma.isFinite()) savedBlurSigma.coerceIn(0f, 40f) else 0f
+            colorGrade = ColorGradeSettings(
+                hueAdjustmentDegrees = if (savedHue.isFinite()) savedHue.coerceIn(-180f, 180f) else 0f,
+                saturationAdjustment = if (savedSaturation.isFinite()) savedSaturation.coerceIn(-100f, 100f) else 0f,
+                lightnessAdjustment = if (savedLightness.isFinite()) savedLightness.coerceIn(-100f, 100f) else 0f
+            )
             rotationDegrees = document.optInt("rotationDegrees", 0).let { if (it in setOf(0, 90, 180, 270)) it else 0 }
             overlayText = document.optString("textOverlay", "").take(120)
+            val savedAudioUri = document.optString("backgroundAudioUri", "")
+            backgroundAudioUri = savedAudioUri.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
+            val savedGain = document.optDouble("backgroundAudioGain", 0.70).toFloat()
+            backgroundAudioSettings = AudioTrackSettings(
+                gain = if (savedGain.isFinite()) savedGain.coerceIn(0f, 1f) else 0.70f
+            )
+            val savedSourceGain = document.optDouble("sourceAudioGain", 1.0).toFloat()
+            sourceAudioSettings = AudioTrackSettings(
+                gain = if (savedSourceGain.isFinite()) savedSourceGain.coerceIn(0f, 1f) else 1f
+            )
+            refreshSourceAudioControls()
+            refreshBackgroundAudioControls()
             selectedCubeLut = null
             selectedCubeLutUri = null
             lutLoadToken++
@@ -681,7 +1312,13 @@ class EditorActivity : Activity() {
             }
             brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
             contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
+            hueSeek.progress = (colorGrade.hueAdjustmentDegrees + 180f).toInt().coerceIn(0, 360)
+            saturationSeek.progress = (colorGrade.saturationAdjustment + 100f).toInt().coerceIn(0, 200)
+            lightnessSeek.progress = (colorGrade.lightnessAdjustment + 100f).toInt().coerceIn(0, 200)
+            blurSeek.progress = kotlin.math.round((blurSigma / 40f) * 100f).toInt().coerceIn(0, 100)
+            mainSpeedSeek.progress = kotlin.math.round(((mainClipSpeed - 0.25f) / 3.75f) * 100f).toInt().coerceIn(0, 100)
             updateColorValues()
+            updateMainSpeedFromSeek()
             refreshRotationControls()
             refreshTextOverlay()
             loadVideo(Uri.parse(sourceString), Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -725,6 +1362,7 @@ class EditorActivity : Activity() {
                     val value = nextPlayer.duration
                     if (value != C.TIME_UNSET && value > 0L) {
                         durationMs = value
+                        nextPlayer.setPlaybackSpeed(mainClipSpeed)
                         val requestedStart = restoreStartMs
                         val requestedEnd = restoreEndMs
                         if (requestedStart != null && requestedEnd != null) {
@@ -759,6 +1397,7 @@ class EditorActivity : Activity() {
             }
         })
         nextPlayer.setMediaItem(MediaItem.fromUri(uri))
+        nextPlayer.setPlaybackSpeed(mainClipSpeed)
         nextPlayer.setVideoEffects(buildVideoEffects())
         nextPlayer.prepare()
         nextPlayer.playWhenReady = false
@@ -789,14 +1428,85 @@ class EditorActivity : Activity() {
     private fun updateColorValues() {
         brightnessValue = ((brightnessSeek.progress - 100) / 100f).coerceIn(-1f, 1f)
         contrastValue = ((contrastSeek.progress - 100) / 100f).coerceIn(-1f, 1f)
-        effectSummary.text = "Brightness ${String.format(Locale.ROOT, "%.2f", brightnessValue)}  ·  Contrast ${String.format(Locale.ROOT, "%.2f", contrastValue)}"
+        colorGrade = ColorGradeSettings(
+            hueAdjustmentDegrees = (hueSeek.progress - 180).toFloat(),
+            saturationAdjustment = (saturationSeek.progress - 100).toFloat(),
+            lightnessAdjustment = (lightnessSeek.progress - 100).toFloat()
+        )
+        effectSummary.text = buildEffectSummary()
         player?.setVideoEffects(buildVideoEffects())
+    }
+
+    private fun buildEffectSummary(): String = buildString {
+        append("Brightness ").append(String.format(Locale.ROOT, "%.2f", brightnessValue))
+        append(" · Contrast ").append(String.format(Locale.ROOT, "%.2f", contrastValue))
+        append("\nHue ").append(colorGrade.hueAdjustmentDegrees.toInt()).append("°")
+        append(" · Saturation ").append(colorGrade.saturationAdjustment.toInt())
+        append(" · Lightness ").append(colorGrade.lightnessAdjustment.toInt())
+        append("\nBlur ").append(if (blurSigma < 0.01f) "0" else String.format(Locale.ROOT, "%.1f", blurSigma))
+    }
+
+    private fun updateMainSpeedFromSeek() {
+        mainClipSpeed = 0.25f + (mainSpeedSeek.progress / 100f) * 3.75f
+        mainClipSpeed = (kotlin.math.round(mainClipSpeed * 100f) / 100f).coerceIn(0.25f, 4f)
+        speedSummary.text = "Main clip speed · " + formatSpeed(mainClipSpeed)
+        speedSummary.setTextColor(if (kotlin.math.abs(mainClipSpeed - 1f) < 0.001f) muted else accent)
+        player?.setPlaybackSpeed(mainClipSpeed)
+    }
+
+    private fun formatSpeed(speed: Float): String =
+        if (kotlin.math.abs(speed - speed.toInt()) < 0.001f) speed.toInt().toString() + "x"
+        else String.format(Locale.ROOT, "%.2fx", speed)
+
+    private fun buildSpeedProvider(speed: Float): SpeedProvider = object : SpeedProvider {
+        override fun getSpeed(timeUs: Long): Float = speed
+        override fun getNextSpeedChangeTimeUs(timeUs: Long): Long = C.TIME_UNSET
+    }
+
+
+    /**
+     * Transformer requires every audio-bearing item in a Composition to output 16-bit PCM
+     * with the same channel count. Normalize audio inputs to stereo before optional gain.
+     */
+    private fun buildAudioProcessors(gain: Float? = null): List<AudioProcessor> {
+        val processors = mutableListOf<AudioProcessor>()
+        processors.add(ToInt16PcmAudioProcessor())
+
+        val channelMixer = ChannelMixingAudioProcessor()
+        for (inputChannels in 1..6) {
+            channelMixer.putChannelMixingMatrix(
+                ChannelMixingMatrix.createForConstantPower(inputChannels, 2)
+            )
+        }
+        processors.add(channelMixer)
+
+        if (gain != null) {
+            processors.add(
+                GainProcessor(
+                    DefaultGainProvider.Builder(gain.coerceIn(0f, 1f)).build()
+                )
+            )
+        }
+        return processors
     }
 
     private fun buildVideoEffects(): List<Effect> {
         val effects = mutableListOf<Effect>()
         if (abs(brightnessValue) > 0.001f) effects.add(Brightness(brightnessValue))
         if (abs(contrastValue) > 0.001f) effects.add(Contrast(contrastValue))
+        if (abs(colorGrade.hueAdjustmentDegrees) > 0.001f ||
+            abs(colorGrade.saturationAdjustment) > 0.001f ||
+            abs(colorGrade.lightnessAdjustment) > 0.001f
+        ) {
+            effects.add(
+                HslAdjustment.Builder()
+                    .adjustHue(colorGrade.hueAdjustmentDegrees)
+                    .adjustSaturation(colorGrade.saturationAdjustment)
+                    .adjustLightness(colorGrade.lightnessAdjustment)
+                    .build()
+            )
+        }
+        if (blurSigma > 0.01f) effects.add(GaussianBlur(blurSigma))
         if (rotationDegrees != 0) {
             effects.add(ScaleAndRotateTransformation.Builder().setRotationDegrees(rotationDegrees.toFloat()).build())
         }
@@ -1060,6 +1770,22 @@ class EditorActivity : Activity() {
         }
     }
 
+    private fun startExportProgressPolling() {
+        handler.removeCallbacks(syncExportProgress)
+        handler.post(syncExportProgress)
+    }
+
+    private fun stopExportProgressPolling() {
+        handler.removeCallbacks(syncExportProgress)
+    }
+
+    private fun resetExportProgressUi() {
+        if (::exportProgressBar.isInitialized) {
+            exportProgressBar.progress = 0
+            exportProgressBar.visibility = View.GONE
+        }
+    }
+
     private fun beginExport() {
         val source = sourceUri
         val destination = pendingExportUri
@@ -1086,20 +1812,41 @@ class EditorActivity : Activity() {
             )
             .build()
         val editedItem = EditedMediaItem.Builder(clippedItem)
-            .setEffects(Effects(emptyList(), buildVideoEffects()))
+            .setSpeed(buildSpeedProvider(mainClipSpeed))
+            .setEffects(Effects(buildAudioProcessors(sourceAudioSettings.gain), buildVideoEffects()))
             .build()
         val sequenceItems = mutableListOf(editedItem)
-        additionalClipUris.forEach { clipUri ->
+        additionalClipUris.forEachIndexed { index, clipUri ->
+            val trim = additionalClipTrims.getOrElse(index) { ClipTrimRange() }
+            val clipItem = MediaItem.Builder()
+                .setUri(clipUri)
+                .setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder()
+                        .setStartPositionMs(trim.startMs)
+                        .apply { trim.endMs?.let { setEndPositionMs(it) } }
+                        .build()
+                )
+                .build()
             sequenceItems.add(
-                EditedMediaItem.Builder(MediaItem.fromUri(clipUri))
-                    .setEffects(Effects(emptyList(), buildVideoEffects()))
+                EditedMediaItem.Builder(clipItem)
+                    .setSpeed(buildSpeedProvider(additionalClipSpeeds.getOrElse(index) { 1f }))
+                    .setEffects(Effects(buildAudioProcessors(sourceAudioSettings.gain), buildVideoEffects()))
                     .build()
             )
         }
-        val sequence = EditedMediaItemSequence.withAudioAndVideoFrom(sequenceItems)
-        val composition = Composition.Builder(sequence).build()
+        val videoSequence = EditedMediaItemSequence.withAudioAndVideoFrom(sequenceItems)
+        val composition = backgroundAudioUri?.let { audioUri ->
+            val audioItem = EditedMediaItem.Builder(MediaItem.fromUri(audioUri))
+                .setEffects(Effects(buildAudioProcessors(backgroundAudioSettings.gain), emptyList()))
+                .build()
+            val audioSequence = EditedMediaItemSequence.withAudioFrom(listOf(audioItem))
+                .buildUpon()
+                .setIsLooping(true)
+                .build()
+            Composition.Builder(videoSequence, audioSequence).build()
+        } ?: Composition.Builder(videoSequence).build()
         exportClipCount = sequenceItems.size
-        status.text = "Rendering ${sequenceItems.size} clip(s)… keep the app open until export finishes."
+        status.text = "Rendering ${sequenceItems.size} clip(s)" + if (backgroundAudioUri != null) " with background audio…" else "… keep the app open until export finishes."
         status.setTextColor(accent)
         exportButton.isEnabled = false
         exportButton.alpha = 0.55f
@@ -1107,6 +1854,8 @@ class EditorActivity : Activity() {
         val activeTransformer = Transformer.Builder(this)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    stopExportProgressPolling()
+                    if (::exportProgressBar.isInitialized) exportProgressBar.progress = 100
                     copyExportToDestination(temp, destination)
                 }
 
@@ -1116,6 +1865,8 @@ class EditorActivity : Activity() {
                     exportException: ExportException
                 ) {
                     runOnUiThread {
+                        stopExportProgressPolling()
+                        resetExportProgressUi()
                         status.text = "Export failed: ${exportException.message ?: exportException.errorCodeName}"
                         status.setTextColor(accent)
                         exportButton.isEnabled = true
@@ -1129,7 +1880,10 @@ class EditorActivity : Activity() {
         transformer = activeTransformer
         try {
             activeTransformer.start(composition, temp.absolutePath)
+            startExportProgressPolling()
         } catch (error: Exception) {
+            stopExportProgressPolling()
+            resetExportProgressUi()
             status.text = "Could not start export: ${error.message ?: "unknown error"}"
             status.setTextColor(accent)
             exportButton.isEnabled = true
@@ -1148,23 +1902,27 @@ class EditorActivity : Activity() {
                     ?: error("Could not open the selected export location.")
                 output.use { sink -> temp.inputStream().use { input -> input.copyTo(sink) } }
                 runOnUiThread {
-                    status.text = "Export complete · ${exportClipCount} clip(s) · ${temp.length() / 1024L} KB written."
+                    stopExportProgressPolling()
+                    status.text = "Export complete · " + exportClipCount + " clip(s) · " + (temp.length() / 1024L) + " KB written."
                     status.setTextColor(green)
                     toast("MP4 export completed.")
                     exportButton.isEnabled = true
                     exportButton.alpha = 1f
                     temporaryOutput = null
                     transformer = null
+                    resetExportProgressUi()
                     temp.delete()
                 }
             } catch (error: Exception) {
                 runOnUiThread {
-                    status.text = "Could not save exported video: ${error.message ?: "unknown error"}"
+                    stopExportProgressPolling()
+                    status.text = "Could not save exported video: " + (error.message ?: "unknown error")
                     status.setTextColor(accent)
                     exportButton.isEnabled = true
                     exportButton.alpha = 1f
                     temporaryOutput = null
                     transformer = null
+                    resetExportProgressUi()
                     temp.delete()
                 }
             }
@@ -1178,9 +1936,11 @@ class EditorActivity : Activity() {
             return
         }
         active.cancel()
+        stopExportProgressPolling()
         temporaryOutput?.delete()
         temporaryOutput = null
         transformer = null
+        resetExportProgressUi()
         status.text = "Export cancelled."
         status.setTextColor(muted)
         exportButton.isEnabled = true
