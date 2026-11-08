@@ -1,0 +1,95 @@
+SOWZ AE STUDIO — MASTER RESEARCH & BUILD PLAN
+Date: 2026-11-09
+Repository: https://github.com/pubgcanavar/SOWZ-AE-Studio
+
+GOAL
+Build a genuine Android motion-graphics editor, not a mock interface. A feature is complete only when the UI edits a real project object, preview and export show the same result, project save/reopen preserves it, and tests cover it.
+
+RIGHTS AND REUSE RULE
+Do not copy proprietary Nova Editor source code, APK contents, decompiled implementation, assets, branding, private APIs or artwork without permission. Nova is a public feature benchmark only. Implement comparable capabilities with original SOWZ code, original artwork and documented standards.
+
+EffectCraft is open source. Its root Cargo workspace declares MIT OR Apache-2.0 and its repository contains LICENSE-MIT, LICENSE-APACHE, NOTICE and ATTRIBUTION.md. Eligible source can be reused or adapted under the chosen licence, retaining required copyright/licence notices and attribution. Audit every dependency and every asset separately. Do not use ArtCraft trademarks, logos or branded art as SOWZ branding. Pin a reviewed upstream commit; do not blindly track main.
+
+RESEARCHED SOURCES
+EffectCraft source: https://github.com/storytold/effectcraft
+Reviewed upstream tree commit: a41ff5015c6687db15a6f074a47b870b8f09fece
+Observed workspace version: 0.21.0; Rust 2024 edition; minimum Rust 1.95.
+EffectCraft AEP importer: https://github.com/storytold/effectcraft/blob/main/docs/aep-import.md
+AEP importer last updated 2026-11-07; describes .aep/.aepx import, dry-run analysis, explicit loss reporting and verified partial support.
+EffectCraft AEP exporter: https://github.com/storytold/effectcraft/blob/main/docs/aep-export.md
+EffectCraft AEP crate: https://github.com/storytold/effectcraft/tree/main/crates/aep
+EffectCraft PSD crate: https://github.com/storytold/effectcraft/tree/main/crates/psd
+EffectCraft effects crate: https://github.com/storytold/effectcraft/tree/main/crates/effects
+EffectCraft plug-in crate: https://github.com/storytold/effectcraft/tree/main/crates/plugin
+ArtCraft official site: https://getartcraft.com/
+Nova Editor public feature page: https://www.novavisionhub.com/novaeditor
+
+EFFECTCRAFT FINDINGS
+The engine is split into reusable Rust crates for time, geometry, colour, keyframes, project data, effects, CPU rendering, GPU compositing, media, export, expressions, PSD, AEP, SVG, Lottie, plug-ins and the desktop UI.
+The effect registry and CPU effects are in a separate crate. The PSD reader describes PSD/PSB support for layers, groups, masks, blend modes, text, layer effects and adjustment layers. The plug-in crate hosts sandboxed WebAssembly effects; it is not an Adobe .aex plug-in loader.
+The AEP crate contains a RIFX/Egg container reader/writer, typed project view, import mapping and export mapping. The current import guide says unsupported material is reported, not silently dropped. This is a first integration candidate, but it is not proof that every After Effects project feature is supported or pixel-identical.
+EffectCraft's desktop UI uses egui/eframe. Do not embed that desktop app unchanged as the Android UI.
+
+NOVA EDITOR PUBLIC BENCHMARKS
+The public page surfaced version v0.756.0, updated 2026-10-22. It describes S_Shake, a touch-oriented pen/path tool, snapping controls, 28 blending modes, YY_Ramp+, BCC Magic Sharp, Radial Rays, Linear Streaks, group-effect behaviour, 3D layer intersection and preview scheduling improvements.
+Use these as product-level acceptance targets. Do not extract code or data from the Nova APK, copy proprietary assets, reproduce its branding or rely on private endpoints.
+
+CURRENT SOWZ REPOSITORY AUDIT
+The repository is an Android/Kotlin app using AndroidX Media3. Its README describes version 0.6.0, compileSdk 36, minSdk 24 and Java/Kotlin 17.
+Existing foundation: local video selection/preview; main-clip trim; sequential MP4 export; brightness/contrast; quarter-turn rotation; static text overlay; .cube LUT support; versioned .sowzproj save/reopen; AEP structural/RIFX inspection; best-effort AEPX XML inspection; ZIP project-package inspection; limited FFX parsing; unit-tested timeline/keyframe data model.
+FFX currently extracts effect identifiers and some static numeric values; only a specific static Brightness & Contrast mapping is applied. AEP inspection is structural/partial, not a complete editable import. The existing timeline model is not yet a full multi-track compositor.
+The README itself says this is not yet a full After Effects or Nova Editor replacement.
+
+PROPOSED ARCHITECTURE
+1. Android UI: keep the SOWZ-native, touch-first Android UI and brand. Add canvas, project bin, multi-track timeline, property inspector, effect browser, graph editor, audio panel and render queue as their backing functions become real.
+2. Native core: evaluate a Rust cdylib for Android, connected to Kotlin through JNI or a small stable FFI. Start with arm64-v8a; add emulator/other ABIs after build tests.
+3. Selective Rust crates: first evaluate effectcraft-time, geom, color, keyframe, project, effects, render, aep and psd. Do not import every workspace crate by default.
+4. Rendering: establish CPU output as the correctness reference; evaluate wgpu/Vulkan GPU acceleration only after a CPU baseline and a reliable Android fallback.
+5. Media: keep Media3/hardware codecs where they work best on phones; compare Rust codec crates after device profiling.
+6. Project format: introduce a versioned editable .sowzae package containing manifest, project graph, compositions, layers, sources, effects, keyframes, masks, dependencies, assets, thumbnails and import report. Preserve migration from .sowzproj.
+7. Engine API: expose typed commands for create/move/trim/split/duplicate/delete layer, set property, add/remove keyframe, add effect, import asset, undo/redo and render. UI and tests call the same engine commands.
+
+IMPORT PIPELINE
+Identify format by extension and content signature. Read with bounded memory, bounded recursion, safe XML parsing and ZIP-bomb protection. Generate a dry-run report before modifying the open project. Extract supported compositions, layers, footage, transforms, keyframes, masks, text, effects, expressions and dependencies. Map supported constructs into the native project graph. Preserve original source metadata and unknown fields where possible. Show supported, approximated, skipped and missing dependency counts separately. Require confirmation before lossy conversion. Apply the import as one undoable transaction. Never silently drop an effect, layer, font, expression or asset.
+
+FORMAT TARGETS — PLANNED, NOT CLAIMED AS COMPLETE
+Video: .mp4, .mov, .m4v, .mkv, .webm, .avi, .mxf. Inspect codec, resolution, frame rate, colour and alpha.
+Audio: .wav, .mp3, .m4a, .aac, .aiff, .flac, .opus. Waveform, trim, gain, fades, keyframes and mixed export.
+Images: .png, .jpg, .jpeg, .webp, .bmp, .tif, .tiff, .exr, .gif. Stills, sequences and animated GIF where supported.
+Layered images: .psd and .psb. Preserve groups, layers, masks, blend modes, text, layer effects and adjustment layers only where tested.
+Vector: .svg with paths, fills, strokes and transforms.
+Animation: .json and .lottie import/export with a loss report.
+After Effects preset: .ffx. Continue the independent parser; decode typed properties and keyframes only when validated by fixtures; map each effect to a tested native implementation.
+After Effects scripts: .jsx. Static AST analysis only. Never automatically execute imported scripts. Convert a restricted allowlist of safe project operations after user approval; report file, network, shell and unsupported operations.
+Motion Graphics templates: .mogrt. Inspect package contents, project payload, media, fonts, controls and plug-in dependencies. Convert only verified elements; retain the original package and report non-portable features.
+After Effects projects: .aep and .aepx. Evaluate EffectCraft's AEP crate first; support remains partial and version-dependent. Verify Android build/API compatibility and compare results against authorized fixtures.
+Also research .aet/.aetx, .mgjson and additional image/video/audio formats through separate adapters.
+
+EDITING FEATURE TARGETS
+Timeline: multiple overlapping video/audio/image/text/shape/adjustment tracks; split, trim, ripple, slip, reorder, snapping, markers, nested comps, time remap/reverse/freeze, frame-accurate timing, undo/redo.
+Animation: position, anchor, scale, rotation, opacity, masks, paths and effect keyframes; linear, hold, Bezier, auto/continuous Bezier, temporal ease, spatial tangents, graph editor, value/speed curves and keyframe copy/paste.
+Compositing: alpha, masks, track mattes, parenting, adjustment layers, blend modes, motion blur, colour management and 2D/3D transforms.
+Text/shapes: font dependency warnings, character/paragraph styles, text animators, range selectors, vector shapes, pen tool, Bezier handles, trim paths, repeaters, gradients and strokes.
+Effects: adopt EffectCraft's effect registry/CPU implementations only after Android compatibility and licence audits. Add tested SOWZ-native versions of shake, glow, blur, sharpen, gradient/ramp, rays/streaks, colour correction and particles. Every effect needs parameter UI, persistence, preview/export parity and tests.
+Plugins: evaluate sandboxed WASM effects with permission scopes and resource limits. Native desktop .aex binaries are not Android-loadable and must not be advertised as supported.
+Export: real multi-layer rendering; H.264 MP4 first; later HEVC/AV1/ProRes/MOV/WebM, alpha formats, image sequences and audio-only output according to device support and licence. Add resolution, aspect, fps, bitrate/quality, audio mix, progress/cancel and storage checks.
+
+QUALITY GATES
+Every parser has malformed-input tests, size/depth/entry limits and fuzzable pure functions. Imported scripts never execute. Preview and export share the same semantics. Real reference frames are compared. Test fractional frame rates, portrait/landscape, audio sample rates and varied dimensions. Test on a real mid-range Android phone, measuring memory, speed, heat and battery. Save/reopen must preserve layer order, source links, keyframes, effects and dependency reports. No feature is marked complete until it has a working UI path, persistent project data, rendered output and automated regression coverage.
+
+IMPLEMENTATION ORDER
+Milestone 0: audit licenses, dependencies, assets and Android build constraints; pin the reviewed EffectCraft commit.
+Milestone 1: build a tiny Rust/JNI Android bridge on arm64-v8a; pass selected .aep/.aepx bytes to the AEP analyser and return JSON diagnostics.
+Milestone 2: connect the native project graph and .sowzae save/reopen.
+Milestone 3: AEP/AEPX and PSD import spikes with loss reports and fixtures.
+Milestone 4: CPU renderer, compositing and animated transforms; preview/export parity.
+Milestone 5: native effect stack, keyframe editor, masks, shapes, text animation and blend modes.
+Milestone 6: multi-track audio/video, transitions, relinking, render queue and performance.
+Milestone 7: FFX/JSX/MOGRT adapters, sandboxed WASM effects, 3D and additional formats.
+Milestone 8: fidelity tests, device testing, accessibility, localisation and release hardening.
+
+FIRST TECHNICAL TASK
+Build the isolated Rust/JNI proof of concept for EffectCraft's AEP analyser on Android arm64-v8a. Keep the current Kotlin editor runnable. Do not promise editable AEP import until the bridge compiles, its report matches desktop tests and the importer is mapped into SOWZ's own project model.
+
+STATUS HONESTY
+This file is research and an implementation plan. It does not mean EffectCraft, Nova features, all listed formats, all 300+ effects, or a complete multi-track renderer have already been integrated. Current app functionality remains what the SOWZ repository README and verified builds demonstrate.
