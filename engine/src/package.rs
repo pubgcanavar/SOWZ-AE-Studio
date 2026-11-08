@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-use crate::model::{is_safe_relative_path, Project, ProjectError, PROJECT_SCHEMA_VERSION};
+use crate::model::{is_safe_relative_path, AssetSource, Project, ProjectError, PROJECT_SCHEMA_VERSION};
 
 const PACKAGE_FORMAT: &str = "SOWZAE";
 const PACKAGE_VERSION: u32 = 1;
@@ -51,6 +51,7 @@ struct Manifest {
 
 pub fn save_package(path: impl AsRef<Path>, package: &LoadedPackage) -> Result<(), PackageError> {
     package.project.validate()?;
+    validate_embedded_asset_files(&package.project, &package.files)?;
     if package.files.len() > MAX_ENTRIES {
         return Err(PackageError::Limit("too many package files".to_owned()));
     }
@@ -90,7 +91,7 @@ pub fn save_package(path: impl AsRef<Path>, package: &LoadedPackage) -> Result<(
     writer.start_file("project.json", options)?;
     writer.write_all(&project_bytes)?;
     for (name, bytes) in &package.files {
-        writer.start_file(name, options)?;
+        writer.start_file(name.as_str(), options)?;
         writer.write_all(bytes)?;
     }
     writer.finish()?;
@@ -160,7 +161,22 @@ pub fn load_package(path: impl AsRef<Path>) -> Result<LoadedPackage, PackageErro
     let bytes = project_bytes.ok_or_else(|| PackageError::Invalid("project.json is missing".to_owned()))?;
     let project: Project = serde_json::from_slice(&bytes)?;
     project.validate()?;
+    validate_embedded_asset_files(&project, &files)?;
     Ok(LoadedPackage { project, files })
+}
+
+fn validate_embedded_asset_files(
+    project: &Project,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<(), PackageError> {
+    for asset in &project.assets {
+        if let AssetSource::Embedded { path } = &asset.source {
+            if !files.contains_key(path) {
+                return Err(PackageError::Invalid(format!("embedded asset is missing from package: {path}")));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_entry_name(name: &str) -> Result<(), PackageError> {
