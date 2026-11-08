@@ -345,20 +345,17 @@ impl SowzAeApp {
 
     fn apply_inspector(&mut self) {
         let Some(layer_id) = self.selected_layer_id else { return; };
-        let mut commands = vec![
-            Command::RenameLayer { layer_id, name: self.name_draft.clone() },
-            Command::MoveLayer { layer_id, new_start_frame: self.start_draft },
-            Command::TrimLayer { layer_id, new_duration_frames: self.duration_draft },
-            Command::SetLayerTransform { layer_id, transform: self.transform_draft.clone() },
-        ];
-        let mut last_error = None;
-        for command in commands.drain(..) {
-            if let Err(error) = self.engine.execute(command) {
-                last_error = Some(error.to_string());
-                break;
-            }
-        }
-        self.status = last_error.unwrap_or_else(|| "Layer properties applied".to_owned());
+        let command = Command::SetLayerProperties {
+            layer_id,
+            name: self.name_draft.clone(),
+            start_frame: self.start_draft,
+            duration_frames: self.duration_draft,
+            transform: self.transform_draft.clone(),
+        };
+        self.status = match self.engine.execute(command) {
+            Ok(()) => "Layer properties applied".to_owned(),
+            Err(error) => error.to_string(),
+        };
         self.sync_inspector();
     }
 
