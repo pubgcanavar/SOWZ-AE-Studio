@@ -452,3 +452,33 @@ fn locked_tracks_reject_edits_without_mutating_the_project() {
     assert!(!track.visible);
     assert!(!track.locked);
 }
+
+
+#[test]
+fn keyframe_removal_is_undoable() {
+    let mut engine = EditorEngine::new(project()).expect("valid test project");
+    engine.execute(Command::AddLayer {
+        composition_id: 2,
+        track_id: 3,
+        name: "Animated layer".to_owned(),
+        kind: LayerKind::Text,
+        asset_id: None,
+        start_frame: 0,
+        duration_frames: 90,
+    }).expect("layer should be added");
+    let layer_id = engine.project().compositions[0].tracks[0].layers[0].id;
+    engine.execute(Command::PutKeyframe {
+        layer_id,
+        frame: 15,
+        property: "opacity".to_owned(),
+        value: PropertyValue::Number(0.8),
+        interpolation: Interpolation::Bezier,
+    }).expect("keyframe should be added");
+    let keyframe_id = engine.project().compositions[0].tracks[0].layers[0].keyframes[0].id;
+
+    engine.execute(Command::RemoveKeyframe { layer_id, keyframe_id })
+        .expect("keyframe should be removed");
+    assert!(engine.project().compositions[0].tracks[0].layers[0].keyframes.is_empty());
+    assert!(engine.undo());
+    assert_eq!(engine.project().compositions[0].tracks[0].layers[0].keyframes.len(), 1);
+}
