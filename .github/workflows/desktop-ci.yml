@@ -1,0 +1,38 @@
+name: SOWZ AE Windows desktop build
+
+on:
+  push:
+    branches:
+      - "feature/**"
+    paths:
+      - "desktop/**"
+      - "engine/**"
+      - ".github/workflows/desktop-ci.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "engine/**"
+      - ".github/workflows/desktop-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    name: Build Windows x64 desktop app
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build release executable
+        run: cargo build --release --manifest-path desktop/Cargo.toml
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: sowz-ae-desktop-windows-x64
+          path: desktop/target/release/sowz-ae.exe
+          if-no-files-found: error
+          retention-days: 14
