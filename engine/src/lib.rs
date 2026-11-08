@@ -18,3 +18,6 @@ pub use model::{
     Track, TrackKind, Transform,
 };
 pub use package::{LoadedPackage, PackageError, load_package, save_package};
+
+#[cfg(test)]
+mod tests;
