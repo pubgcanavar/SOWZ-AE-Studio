@@ -76,8 +76,11 @@ A parser accepting a file is not proof that its effects were reproduced. Lossy c
 - [x] Add atomic editing commands and a bounded undo/redo history.
 - [x] Add a versioned `.sowzae` package with resource limits and extra-file preservation.
 - [ ] Run native CI and fix any compile/test failures.
-- [ ] Add Windows desktop executable shell and project browser.
-- [ ] Connect the desktop shell to real file import and preview.
+- [x] Add an initial native Windows desktop workspace using eframe.
+- [x] Connect project open/save, timeline editing commands, layer inspector, undo/redo and SOWZ-native clipboard.
+- [x] Add a linked-media bin for common video, audio, image, vector and interchange file extensions.
+- [ ] Add media probing, decoding and actual frame preview.
+- [ ] Connect effect rendering and final export to the desktop workspace.
 
 ### Editing engine
 - [ ] Multi-track video, audio, image, text and shape composition.
@@ -104,4 +107,4 @@ A parser accepting a file is not proof that its effects were reproduced. Lossy c
 
 ## Current status
 
-The new shared core currently contains project/timeline data structures, validation, editing commands, undo/redo, and a ZIP package implementation. It does **not** yet contain a video compositor, media decoder, live preview, export renderer, Windows UI, Android JNI bridge, FFX/AEP import integration or the EffectCraft effects catalogue. Those remain explicit next milestones.
+The shared core currently contains project/timeline data structures, validation, atomic editing commands, split/duplicate/reorder, SOWZ-native layer clipboard, undo/redo, linked asset references, and a bounded SOWZAE package reader/writer. The first native Windows UI is connected to those operations and can open/save projects, add tracks and layers, import linked media paths, and edit timing/transforms. It is an early project/timeline workspace, not yet a complete video editor: media probing/decoding, rendered preview, compositing, effects execution, final export, Android JNI integration and EffectCraft AEP/FFX adapters are still pending. The current clipboard format is SOWZ AE's own versioned JSON payload; arbitrary After Effects clipboard payload compatibility has not been claimed or verified.
