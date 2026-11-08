@@ -26,6 +26,12 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.media3.common.C
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.ChannelMixingAudioProcessor
+import androidx.media3.common.audio.ChannelMixingMatrix
+import androidx.media3.common.audio.DefaultGainProvider
+import androidx.media3.common.audio.GainProcessor
+import androidx.media3.common.audio.ToInt16PcmAudioProcessor
 import androidx.media3.common.Effect
 import androidx.media3.transformer.Effects
 import androidx.media3.common.MediaItem
@@ -51,6 +57,7 @@ import com.sowz.aestudio.core.CubeLutParser
 import com.sowz.aestudio.core.ClipTrimRange
 import com.sowz.aestudio.core.ClipQueueSnapshot
 import com.sowz.aestudio.core.EditHistory
+import com.sowz.aestudio.core.AudioTrackSettings
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -72,6 +79,7 @@ class EditorActivity : Activity() {
         const val REQUEST_ADD_CLIPS = 2105
         const val REQUEST_IMPORT_LUT = 2106
         const val REQUEST_IMPORT_FFX = 2107
+        const val REQUEST_IMPORT_AUDIO = 2108
         const val SCALE_MAX = 1000
         const val MIN_CLIP_MS = 500L
     }
@@ -80,6 +88,8 @@ class EditorActivity : Activity() {
     private var player: ExoPlayer? = null
     private var transformer: Transformer? = null
     private var sourceUri: Uri? = null
+    private var backgroundAudioUri: Uri? = null
+    private var backgroundAudioSettings = AudioTrackSettings()
     private val additionalClipUris = mutableListOf<Uri>()
     // Kept index-aligned with additionalClipUris; duplicated source URIs can have different trim ranges.
     private val additionalClipTrims = mutableListOf<ClipTrimRange>()
@@ -113,6 +123,9 @@ class EditorActivity : Activity() {
     private lateinit var clipQueueControls: LinearLayout
     private lateinit var undoQueueButton: TextView
     private lateinit var redoQueueButton: TextView
+    private lateinit var backgroundAudioSummary: TextView
+    private lateinit var backgroundAudioGainSummary: TextView
+    private lateinit var backgroundAudioGainSeek: SeekBar
     private lateinit var brightnessSeek: SeekBar
     private lateinit var contrastSeek: SeekBar
     private lateinit var effectSummary: TextView
@@ -364,6 +377,38 @@ class EditorActivity : Activity() {
         add(timelinePanel, button("＋  Add videos to final cut") { pickAdditionalClips() }, top = 10)
         refreshClipQueueSummary()
         add(content, timelinePanel, bottom = 13)
+
+        val audioPanel = panel()
+        add(audioPanel, label("Background audio · separate track"))
+        add(audioPanel, body("Add a music or sound track over the video. It is mixed into MP4 export and loops to the video length. The live viewer does not mix this track yet.", 12f, muted), top = 5)
+        backgroundAudioSummary = body("No background audio selected", 13f, white, true)
+        add(audioPanel, backgroundAudioSummary, top = 9)
+        add(audioPanel, button("＋  Import audio track") { pickBackgroundAudio() }, top = 10)
+        add(audioPanel, label("Music volume"), top = 12)
+        backgroundAudioGainSeek = SeekBar(this).apply {
+            max = 100
+            progress = backgroundAudioSettings.percentage
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    backgroundAudioSettings = backgroundAudioSettings.copy(gain = progress / 100f)
+                    refreshBackgroundAudioControls()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(audioPanel, backgroundAudioGainSeek)
+        backgroundAudioGainSummary = body("70% volume", 11f, accent, true)
+        add(audioPanel, backgroundAudioGainSummary, top = 4)
+        add(audioPanel, button("Remove background audio", secondary = true) {
+            backgroundAudioUri = null
+            refreshBackgroundAudioControls()
+            status.text = "Background audio removed from the project."
+            status.setTextColor(muted)
+        }, top = 8)
+        refreshBackgroundAudioControls()
+        add(content, audioPanel, bottom = 13)
 
         val effectsPanel = panel()
         add(effectsPanel, label("Color effects"))
@@ -845,6 +890,54 @@ class EditorActivity : Activity() {
             REQUEST_ADD_CLIPS -> addAdditionalClips(data)
             REQUEST_IMPORT_LUT -> loadCubeLut(data?.data ?: return, data.flags)
             REQUEST_IMPORT_FFX -> loadFfxPreset(data?.data ?: return, data.flags)
+            REQUEST_IMPORT_AUDIO -> loadBackgroundAudio(data?.data ?: return, data.flags)
+        }
+    }
+
+    private fun pickBackgroundAudio() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_IMPORT_AUDIO)
+    }
+
+    private fun loadBackgroundAudio(uri: Uri, flags: Int) {
+        if ((flags and Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0) {
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri, flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {
+                // Some document providers only issue temporary read grants.
+            }
+        }
+        backgroundAudioUri = uri
+        refreshBackgroundAudioControls()
+        status.text = "Background audio selected. It will be mixed during MP4 export; the live viewer still previews the video track only."
+        status.setTextColor(green)
+        toast("Background audio added to the export composition.")
+    }
+
+    private fun refreshBackgroundAudioControls() {
+        if (::backgroundAudioSummary.isInitialized) {
+            val uri = backgroundAudioUri
+            backgroundAudioSummary.text = if (uri == null) {
+                "No background audio selected"
+            } else {
+                queryDisplayName(uri)
+            }
+            backgroundAudioSummary.setTextColor(if (uri == null) muted else white)
+        }
+        if (::backgroundAudioGainSeek.isInitialized) {
+            val expected = backgroundAudioSettings.percentage
+            if (backgroundAudioGainSeek.progress != expected) {
+                backgroundAudioGainSeek.progress = expected
+            }
+        }
+        if (::backgroundAudioGainSummary.isInitialized) {
+            backgroundAudioGainSummary.text = backgroundAudioSettings.percentage.toString() + "% volume"
         }
     }
 
@@ -889,6 +982,8 @@ class EditorActivity : Activity() {
                 .put("textOverlay", overlayText)
                 .put("cubeLutUri", selectedCubeLutUri?.toString())
                 .put("cubeLutTitle", selectedCubeLut?.title)
+                .put("backgroundAudioUri", backgroundAudioUri?.toString())
+                .put("backgroundAudioGain", backgroundAudioSettings.gain.toDouble())
                 .put("additionalClipUris", org.json.JSONArray().apply {
                     additionalClipUris.forEachIndexed { index, uri ->
                         val trim = additionalClipTrims.getOrElse(index) { ClipTrimRange() }
@@ -899,7 +994,7 @@ class EditorActivity : Activity() {
                     }
                 })
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 0.9.0")
+                .put("createdWith", "SOWZ AE Studio 1.0.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
@@ -961,6 +1056,13 @@ class EditorActivity : Activity() {
             contrastValue = document.optDouble("contrast", 0.0).toFloat().coerceIn(-1f, 1f)
             rotationDegrees = document.optInt("rotationDegrees", 0).let { if (it in setOf(0, 90, 180, 270)) it else 0 }
             overlayText = document.optString("textOverlay", "").take(120)
+            val savedAudioUri = document.optString("backgroundAudioUri", "")
+            backgroundAudioUri = savedAudioUri.takeIf { it.isNotBlank() }?.let { Uri.parse(it) }
+            val savedGain = document.optDouble("backgroundAudioGain", 0.70).toFloat()
+            backgroundAudioSettings = AudioTrackSettings(
+                gain = if (savedGain.isFinite()) savedGain.coerceIn(0f, 1f) else 0.70f
+            )
+            refreshBackgroundAudioControls()
             selectedCubeLut = null
             selectedCubeLutUri = null
             lutLoadToken++
@@ -1082,6 +1184,32 @@ class EditorActivity : Activity() {
         contrastValue = ((contrastSeek.progress - 100) / 100f).coerceIn(-1f, 1f)
         effectSummary.text = "Brightness ${String.format(Locale.ROOT, "%.2f", brightnessValue)}  ·  Contrast ${String.format(Locale.ROOT, "%.2f", contrastValue)}"
         player?.setVideoEffects(buildVideoEffects())
+    }
+
+    /**
+     * Transformer requires every audio-bearing item in a Composition to output 16-bit PCM
+     * with the same channel count. Normalize audio inputs to stereo before optional gain.
+     */
+    private fun buildAudioProcessors(gain: Float? = null): List<AudioProcessor> {
+        val processors = mutableListOf<AudioProcessor>()
+        processors.add(ToInt16PcmAudioProcessor())
+
+        val channelMixer = ChannelMixingAudioProcessor()
+        for (inputChannels in 1..6) {
+            channelMixer.putChannelMixingMatrix(
+                ChannelMixingMatrix.createForConstantPower(inputChannels, 2)
+            )
+        }
+        processors.add(channelMixer)
+
+        if (gain != null) {
+            processors.add(
+                GainProcessor(
+                    DefaultGainProvider.Builder(gain.coerceIn(0f, 1f)).build()
+                )
+            )
+        }
+        return processors
     }
 
     private fun buildVideoEffects(): List<Effect> {
@@ -1377,7 +1505,7 @@ class EditorActivity : Activity() {
             )
             .build()
         val editedItem = EditedMediaItem.Builder(clippedItem)
-            .setEffects(Effects(emptyList(), buildVideoEffects()))
+            .setEffects(Effects(buildAudioProcessors(), buildVideoEffects()))
             .build()
         val sequenceItems = mutableListOf(editedItem)
         additionalClipUris.forEachIndexed { index, clipUri ->
@@ -1393,14 +1521,23 @@ class EditorActivity : Activity() {
                 .build()
             sequenceItems.add(
                 EditedMediaItem.Builder(clipItem)
-                    .setEffects(Effects(emptyList(), buildVideoEffects()))
+                    .setEffects(Effects(buildAudioProcessors(), buildVideoEffects()))
                     .build()
             )
         }
-        val sequence = EditedMediaItemSequence.withAudioAndVideoFrom(sequenceItems)
-        val composition = Composition.Builder(sequence).build()
+        val videoSequence = EditedMediaItemSequence.withAudioAndVideoFrom(sequenceItems)
+        val composition = backgroundAudioUri?.let { audioUri ->
+            val audioItem = EditedMediaItem.Builder(MediaItem.fromUri(audioUri))
+                .setEffects(Effects(buildAudioProcessors(backgroundAudioSettings.gain), emptyList()))
+                .build()
+            val audioSequence = EditedMediaItemSequence.withAudioFrom(listOf(audioItem))
+                .buildUpon()
+                .setIsLooping(true)
+                .build()
+            Composition.Builder(videoSequence, audioSequence).build()
+        } ?: Composition.Builder(videoSequence).build()
         exportClipCount = sequenceItems.size
-        status.text = "Rendering ${sequenceItems.size} clip(s)… keep the app open until export finishes."
+        status.text = "Rendering ${sequenceItems.size} clip(s)" + if (backgroundAudioUri != null) " with background audio…" else "… keep the app open until export finishes."
         status.setTextColor(accent)
         exportButton.isEnabled = false
         exportButton.alpha = 0.55f

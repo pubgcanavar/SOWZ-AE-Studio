@@ -175,3 +175,20 @@ Delivered in this branch:
 - EffectCraft contributing and clean-room rules: https://github.com/storytold/effectcraft/blob/main/CONTRIBUTING.md
 - AndroidX Media3 Composition guide: https://developer.android.com/media/media3/transformer/composition
 - Existing SOWZ source and roadmap: https://github.com/pubgcanavar/SOWZ-AE-Studio
+
+
+## 8. Implemented background audio sequence in SOWZ 1.0.0
+
+The Android editor now exposes one separate background audio source, a linear gain control, and an MP4 export path that builds an audio-only Media3 sequence alongside the video sequence. The audio sequence loops to composition length. The source URI and gain are saved as optional .sowzproj fields, so earlier project files remain readable.
+
+The Media3 Transformer start(Composition, path) contract requires every item that contains audio to output 16-bit PCM with the same channel count. SOWZ applies ToInt16PcmAudioProcessor and ChannelMixingAudioProcessor with 1–6 input channels downmixed to stereo for every audio-bearing item; a GainProcessor applies the selected gain to the background track. Inputs with more than six audio channels may need to be downmixed before importing.
+
+The live editor preview still uses the source video in ExoPlayer and does not yet mix the background track. The separate track is included only in composition export in this milestone. Media3 documents composition preview through CompositionPlayer, but it is still an experimental/preview-level API for this use case. Sequence crossfades are not supported by the current Transformer Composition API.
+
+Official references:
+- Media3 Composition guide: https://developer.android.com/media/media3/transformer/composition
+- Transformer audio format requirements: https://developer.android.com/reference/androidx/media3/transformer/Transformer
+- Channel mixing matrix: https://developer.android.com/reference/androidx/media3/common/audio/ChannelMixingMatrix
+- Channel mixing processor: https://developer.android.com/reference/androidx/media3/common/audio/ChannelMixingAudioProcessor
+- Gain processor: https://developer.android.com/reference/androidx/media3/common/audio/GainProcessor
+- Default gain provider: https://developer.android.com/reference/androidx/media3/common/audio/DefaultGainProvider

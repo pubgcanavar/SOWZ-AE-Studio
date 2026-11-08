@@ -2,10 +2,11 @@
 
 A native Android video-editing foundation. This project now performs real local video processing; it is still not a complete After Effects or Nova Editor replacement.
 
-## Current build — 0.9.0
+## Current build — 1.0.0
 
 - **Import and preview:** pick a local video using Android's document picker and preview the main clip with Media3/ExoPlayer.
 - **Trim and sequential cut:** set IN/OUT points for the main clip, add up to 20 additional video clips, then render a sequential MP4 composition. Each added clip can be moved up/down, duplicated, removed, and assigned its own IN/OUT source range; export uses the displayed order and each clip's saved trim. Queue order and trim edits support bounded Undo/Redo.
+- **Separate background audio:** import one music/sound file, set its export gain, and loop it as an independent Media3 audio sequence over the video. The project stores the audio URI and gain.
 - **Applied colour controls:** brightness and contrast adjustments; quarter-turn rotation (0°, 90°, 180°, 270°); text/title/watermark overlay.
 - **CC / 3D LUT:** import a standard `.cube` 3D colour lookup table. The LUT is applied to the main-clip preview and rendered output using Media3 `SingleColorLut`.
 - **Save/reopen projects:** the versioned `.sowzproj` file stores trim points, effects, text, LUT and source media URI references.
@@ -14,15 +15,17 @@ A native Android video-editing foundation. This project now performs real local 
 
 ## Important compatibility limits
 
-This is an incremental working editor, **not a full After Effects replacement**. Version 0.9.0 adds editable sequential clip order, per-clip export trimming and bounded queue Undo/Redo; it still does not provide a full multi-track compositor.
+This is an incremental working editor, **not a full After Effects replacement**. Version 1.0.0 adds a looping background-audio sequence to MP4 export, alongside editable sequential clip order, per-clip export trimming and bounded queue Undo/Redo; it still does not provide a full multi-track visual compositor.
 
-- The sequential clip queue is not yet a full multi-track timeline. The main clip has trim handles and live preview; added clips can be reordered, duplicated, removed and independently trimmed for export. Added clips do not yet have simultaneous live preview or overlapping visual tracks/transitions.
+- The sequential clip queue is not yet a full multi-track timeline. The main clip has trim handles and live preview; added clips can be reordered, duplicated, removed and independently trimmed for export. The background audio track is rendered in the MP4 but is not mixed into the live viewer yet. There are no overlapping visual tracks/transitions or independent per-clip live preview.
 - The timeline/keyframe model has unit tests, but animated properties are not yet connected to a fully composited renderer/export timeline.
 - **`.cube` CC LUT support is real but scoped:** the current importer supports standalone 3D LUTs with sizes 2–64 and the standard `DOMAIN_MIN 0 0 0` / `DOMAIN_MAX 1 1 1` domain. It rejects 1D shaper tables and nonstandard domains rather than silently producing an incorrect result. Colour results may differ from After Effects because the host colour pipeline and LUT conventions are not universally identical.
 - **`.ffx` support is partial and explicitly scoped.** The parser now decodes effect match names and static numeric parameter values where the file structure is recognized. The editor translates only static `ADBE Brightness & Contrast` values into SOWZ's native brightness/contrast controls. It does not apply arbitrary FFX presets, animated/keyframed parameters, expressions, masks, third-party plug-ins, Deep Glow, Magic Bullet, or other effects unless a specific native mapping is implemented and tested. Unsupported effects are reported instead of being shown as applied.
 - Binary `.aep` inspection is structural and partial; `.aepx`/`.aet` inspection is best-effort XML. Original AEP projects are not edited or rendered.
 - After Effects `.aex` plug-ins are desktop binaries and cannot simply be installed into Android. Effects need Android-compatible implementations and individual compatibility tests.
 - AI upscaling, background removal, tracking, stabilisation, optical-flow interpolation and advanced speed curves are not implemented merely because they appear in the roadmap.
+
+The audio composition normalizes audio-bearing items to 16-bit PCM stereo before mixing. Current channel-mix matrices cover up to 5.1 input; sources with more than six channels may fail export and should be downmixed before import. Crossfading sequences is not supported by the current Media3 Composition API.
 
 A preset/file being accepted is not proof that its effect can be reproduced correctly. The UI and documentation distinguish implemented functions from planned work.
 

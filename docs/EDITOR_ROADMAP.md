@@ -4,7 +4,7 @@ Updated: 2026-10-25
 
 This roadmap uses public product feature lists, official AndroidX Media3 APIs, and public/licensed file-format research. It does not use leaked private data, credentials, hidden endpoints or access-control bypasses.
 
-## Delivered foundation — 0.9.0 (editable queue, per-clip trims and Undo/Redo)
+## Delivered foundation — 1.0.0 (editable clip queue, per-clip trims, Undo/Redo and background audio)
 
 - Local source video import and main-clip playback preview.
 - IN/OUT trim handles for the main clip.
@@ -13,12 +13,21 @@ This roadmap uses public product feature lists, official AndroidX Media3 APIs, a
 - Independent IN/OUT source trim for each additional clip, read from source duration off the UI thread and applied to the corresponding Media3 ClippingConfiguration.
 - Backward-compatible `.sowzproj` parsing: legacy string URI entries remain readable; new object entries store each clip's IN/OUT points.
 - Bounded 50-snapshot Undo/Redo for queue edits (add, move, duplicate, remove and per-clip trim); a new edit clears the redo branch, and loading a project resets history.
+- One independent background-audio sequence, imported through Android's document picker, looped to composition length and mixed into MP4 export with an adjustable linear gain.
+- The project saves/restores the background audio URI and gain while remaining compatible with older `.sowzproj` files that omit these optional fields.
+- Audio-bearing video and audio items use the same Media3 PCM16/stereo normalization chain before composition mixing.
 - Real brightness, contrast, quarter-turn rotation and static text/watermark overlay effects on preview and export.
 - Standard 3D `.cube` CC LUT import, parsing and application via Media3 `SingleColorLut`.
 - Save/reopen `.sowzproj` with source URI references, edit settings, text, LUT and clip queue.
 - Tested timeline/keyframe data model (time conversion, layer timing, split/visibility and float interpolation).
 - After Effects project/preset inspector; `.ffx` effect-name and static-number decoding for recognized structures.
 - Limited `.ffx` translation: static `ADBE Brightness & Contrast` values are applied to the native brightness/contrast controls; animated or third-party effects remain unsupported.
+
+## Next milestone — multi-track timeline and audio preview
+
+- Add background audio to the in-app CompositionPlayer preview when its API is stable enough for the supported device range; until then, preview/export parity is explicitly incomplete.
+- Add independent audio clips, per-clip IN/OUT, gain automation and audio waveform display.
+- Add original-video audio mute/gain controls and a project-level audio mixer.
 
 ## Next milestone — independent clip editing
 
@@ -32,7 +41,7 @@ Acceptance: every queued clip has its own editable source range; save/reopen pre
 ## Multi-track timeline and composite preview
 
 - Connect the tested `TimelineProject` model to a real timeline UI with clip blocks, playhead, zoom, snapping, selection, z-order, visibility and locks.
-- Add independent video/image, audio, text and shape layers with overlapping timing.
+- Add independent video/image, audio, text and shape layers with overlapping timing (the single background-audio export sequence is the first audio track, not a complete audio timeline).
 - Render the same composition model in preview and export; no fake layer preview that differs from the actual render.
 - Add undo/redo using command-based history.
 - Keep timeline math in integer milliseconds/frame indexes to prevent drift.

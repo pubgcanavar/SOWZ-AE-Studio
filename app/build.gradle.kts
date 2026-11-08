@@ -9,8 +9,8 @@ android {
         applicationId = "com.sowz.aestudio"
         minSdk = 24
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.9.0"
+        versionCode = 10
+        versionName = "1.0.0"
         testInstrumentationRunner = "android.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
