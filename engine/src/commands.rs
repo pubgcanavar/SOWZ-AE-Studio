@@ -44,6 +44,7 @@ pub enum Command {
         value: PropertyValue,
         interpolation: Interpolation,
     },
+    RemoveKeyframe { layer_id: u64, keyframe_id: u64 },
     AddEffect { layer_id: u64, effect_type: String },
     SetEffectParameter { effect_id: u64, name: String, value: ParameterValue },
     RemoveLayer { layer_id: u64 },
@@ -284,6 +285,13 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
                 layer.keyframes.push(Keyframe { id, frame, property, value, interpolation });
                 layer.keyframes.sort_by_key(|item| item.frame);
             }
+        }
+        Command::RemoveKeyframe { layer_id, keyframe_id } => {
+            let layer = find_layer_mut(project, layer_id)?;
+            let index = layer.keyframes.iter()
+                .position(|keyframe| keyframe.id == keyframe_id)
+                .ok_or(ProjectError::NotFound)?;
+            layer.keyframes.remove(index);
         }
         Command::AddEffect { layer_id, effect_type } => {
             let id = project.allocate_id()?;
