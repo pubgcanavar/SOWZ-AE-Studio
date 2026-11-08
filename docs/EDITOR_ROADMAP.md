@@ -1,10 +1,10 @@
 # SOWZ AE Studio — editor development roadmap
 
-Updated: 2026-10-25
+Updated: 2026-11-09
 
 This roadmap uses public product feature lists, official AndroidX Media3 APIs, and public/licensed file-format research. It does not use leaked private data, credentials, hidden endpoints or access-control bypasses.
 
-## Delivered foundation — 1.2.0 (editable clip queue, audio mixer and HSL colour grading)
+## Delivered foundation — 1.3.0 (editable clip queue, audio mixer, HSL, blur and speed)
 
 - Local source video import and main-clip playback preview.
 - IN/OUT trim handles for the main clip.
@@ -18,6 +18,8 @@ This roadmap uses public product feature lists, official AndroidX Media3 APIs, a
 - Audio-bearing video and audio items use the same Media3 PCM16/stereo normalization chain before composition mixing.
 - Original video audio has an independent 0–100% export gain, including a true mute setting at 0%; the setting is saved and restored with the project.
 - Real brightness, contrast, hue, saturation and lightness grading, quarter-turn rotation and static text/watermark overlay effects on preview and export. HSL uses the native Media3 HslAdjustment GPU effect.
+- Gaussian Blur with 0–40 sigma using Media3's native GPU effect in preview and export.
+- Main-clip speed from 0.25x–4x using Media3 SpeedProvider in preview and export; value is persisted in the project.
 - Standard 3D `.cube` CC LUT import, parsing and application via Media3 `SingleColorLut`.
 - Save/reopen `.sowzproj` with source URI references, edit settings, text, LUT and clip queue.
 - Tested timeline/keyframe data model (time conversion, layer timing, split/visibility and float interpolation).
