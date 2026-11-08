@@ -4,7 +4,7 @@ Updated: 2026-10-25
 
 This roadmap uses public product feature lists, official AndroidX Media3 APIs, and public/licensed file-format research. It does not use leaked private data, credentials, hidden endpoints or access-control bypasses.
 
-## Delivered foundation — 1.1.0 (editable clip queue, per-clip trims, Undo/Redo and audio mixer)
+## Delivered foundation — 1.2.0 (editable clip queue, audio mixer and HSL colour grading)
 
 - Local source video import and main-clip playback preview.
 - IN/OUT trim handles for the main clip.
@@ -17,7 +17,7 @@ This roadmap uses public product feature lists, official AndroidX Media3 APIs, a
 - The project saves/restores the background audio URI and gain while remaining compatible with older `.sowzproj` files that omit these optional fields.
 - Audio-bearing video and audio items use the same Media3 PCM16/stereo normalization chain before composition mixing.
 - Original video audio has an independent 0–100% export gain, including a true mute setting at 0%; the setting is saved and restored with the project.
-- Real brightness, contrast, quarter-turn rotation and static text/watermark overlay effects on preview and export.
+- Real brightness, contrast, hue, saturation and lightness grading, quarter-turn rotation and static text/watermark overlay effects on preview and export. HSL uses the native Media3 HslAdjustment GPU effect.
 - Standard 3D `.cube` CC LUT import, parsing and application via Media3 `SingleColorLut`.
 - Save/reopen `.sowzproj` with source URI references, edit settings, text, LUT and clip queue.
 - Tested timeline/keyframe data model (time conversion, layer timing, split/visibility and float interpolation).
@@ -58,7 +58,7 @@ Acceptance: overlapping layer timing, z-order, audio selection and project resto
 
 ## Native effect stack
 
-- Saturation, hue, blur/sharpen, vignette and additional colour controls where Media3/OpenGL supports them.
+- Add GPU Gaussian blur/sharpen, vignette, channel controls and a reorderable effect stack with per-effect enable/disable.
 - Same effect definitions for preview/export; persist effect order, parameters and enabled state.
 - Fixture-based image comparisons and physical-device export testing.
 

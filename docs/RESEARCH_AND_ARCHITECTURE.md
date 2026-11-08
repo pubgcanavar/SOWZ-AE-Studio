@@ -199,3 +199,15 @@ Official references:
 The editor now applies a separately saved source-video audio gain to each video sequence item, so users can lower or mute original clip audio while keeping the separate background music track. A gain of zero mutes the source audio; one is full gain. The same Media3 PCM16/stereo conversion chain is applied before mixing.
 
 This remains a project-level source-audio control, not yet a per-clip volume envelope or a complete multi-track audio mixer. The live viewer also does not yet reflect the export mix.
+
+
+## 10. Native HSL colour grading in SOWZ 1.2.0
+
+The editor now adds hue rotation (-180°..180°), saturation (-100..100) and lightness (-100..100) controls through AndroidX Media3 HslAdjustment. These settings feed the same buildVideoEffects() list used by ExoPlayer preview and each Transformer export item. Values are stored in optional .sowzproj JSON properties; projects created before this version default to neutral HSL values when opened.
+
+This is a native SOWZ colour effect, not an After Effects plug-in and not a claim of exact colour-management parity with Adobe applications. Visual output depends on the Media3/GPU colour pipeline and should be checked on physical devices and reference frames.
+
+Official API references:
+- HslAdjustment: https://developer.android.com/reference/androidx/media3/effect/HslAdjustment
+- HslAdjustment.Builder: https://developer.android.com/reference/androidx/media3/effect/HslAdjustment.Builder
+- Media3 Effect APIs: https://developer.android.com/reference/androidx/media3/common/Effect

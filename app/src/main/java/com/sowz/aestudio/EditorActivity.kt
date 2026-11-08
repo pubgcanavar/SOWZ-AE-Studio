@@ -39,6 +39,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
+import androidx.media3.effect.HslAdjustment
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.SingleColorLut
@@ -58,6 +59,7 @@ import com.sowz.aestudio.core.ClipTrimRange
 import com.sowz.aestudio.core.ClipQueueSnapshot
 import com.sowz.aestudio.core.EditHistory
 import com.sowz.aestudio.core.AudioTrackSettings
+import com.sowz.aestudio.core.ColorGradeSettings
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -104,6 +106,7 @@ class EditorActivity : Activity() {
     private var restoreEndMs: Long? = null
     private var brightnessValue = 0f
     private var contrastValue = 0f
+    private var colorGrade = ColorGradeSettings()
     private var rotationDegrees = 0
     private var overlayText = ""
     private var selectedCubeLut: CubeLutData? = null
@@ -131,6 +134,9 @@ class EditorActivity : Activity() {
     private lateinit var backgroundAudioGainSeek: SeekBar
     private lateinit var brightnessSeek: SeekBar
     private lateinit var contrastSeek: SeekBar
+    private lateinit var hueSeek: SeekBar
+    private lateinit var saturationSeek: SeekBar
+    private lateinit var lightnessSeek: SeekBar
     private lateinit var effectSummary: TextView
     private lateinit var lutSummary: TextView
     private lateinit var rotationSummary: TextView
@@ -433,7 +439,7 @@ class EditorActivity : Activity() {
 
         val effectsPanel = panel()
         add(effectsPanel, label("Color effects"))
-        add(effectsPanel, body("Brightness and contrast run on the exported frames and are previewed with the same Media3 effects.", 12f, muted), top = 5)
+        add(effectsPanel, body("Live preview and MP4 export share the same native GPU colour effects.", 12f, muted), top = 5)
         add(effectsPanel, label("Brightness"), top = 12)
         brightnessSeek = SeekBar(this).apply {
             max = 200
@@ -460,11 +466,53 @@ class EditorActivity : Activity() {
             })
         }
         add(effectsPanel, contrastSeek)
-        effectSummary = body("Brightness 0.00  ·  Contrast 0.00", 12f, accent, true)
+        add(effectsPanel, label("Hue · -180° to +180°"), top = 8)
+        hueSeek = SeekBar(this).apply {
+            max = 360
+            progress = 180
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateColorValues()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, hueSeek)
+        add(effectsPanel, label("Saturation · -100 to +100"), top = 5)
+        saturationSeek = SeekBar(this).apply {
+            max = 200
+            progress = 100
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateColorValues()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, saturationSeek)
+        add(effectsPanel, label("Lightness · -100 to +100"), top = 5)
+        lightnessSeek = SeekBar(this).apply {
+            max = 200
+            progress = 100
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) updateColorValues()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, lightnessSeek)
+        effectSummary = body("Brightness 0.00 · Contrast 0.00\nHue 0° · Saturation 0 · Lightness 0", 12f, accent, true)
         add(effectsPanel, effectSummary, top = 7)
         add(effectsPanel, button("Reset color controls", secondary = true) {
             brightnessSeek.progress = 100
             contrastSeek.progress = 100
+            hueSeek.progress = 180
+            saturationSeek.progress = 100
+            lightnessSeek.progress = 100
             updateColorValues()
         }, top = 9)
         add(content, effectsPanel, bottom = 13)
@@ -1016,6 +1064,9 @@ class EditorActivity : Activity() {
                 .put("trimEndMs", clipEndMs)
                 .put("brightness", brightnessValue.toDouble())
                 .put("contrast", contrastValue.toDouble())
+                .put("hueAdjustmentDegrees", colorGrade.hueAdjustmentDegrees.toDouble())
+                .put("saturationAdjustment", colorGrade.saturationAdjustment.toDouble())
+                .put("lightnessAdjustment", colorGrade.lightnessAdjustment.toDouble())
                 .put("rotationDegrees", rotationDegrees)
                 .put("textOverlay", overlayText)
                 .put("cubeLutUri", selectedCubeLutUri?.toString())
@@ -1033,7 +1084,7 @@ class EditorActivity : Activity() {
                     }
                 })
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 1.1.0")
+                .put("createdWith", "SOWZ AE Studio 1.2.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
@@ -1093,6 +1144,14 @@ class EditorActivity : Activity() {
             restoreEndMs = end
             brightnessValue = document.optDouble("brightness", 0.0).toFloat().coerceIn(-1f, 1f)
             contrastValue = document.optDouble("contrast", 0.0).toFloat().coerceIn(-1f, 1f)
+            val savedHue = document.optDouble("hueAdjustmentDegrees", 0.0).toFloat()
+            val savedSaturation = document.optDouble("saturationAdjustment", 0.0).toFloat()
+            val savedLightness = document.optDouble("lightnessAdjustment", 0.0).toFloat()
+            colorGrade = ColorGradeSettings(
+                hueAdjustmentDegrees = if (savedHue.isFinite()) savedHue.coerceIn(-180f, 180f) else 0f,
+                saturationAdjustment = if (savedSaturation.isFinite()) savedSaturation.coerceIn(-100f, 100f) else 0f,
+                lightnessAdjustment = if (savedLightness.isFinite()) savedLightness.coerceIn(-100f, 100f) else 0f
+            )
             rotationDegrees = document.optInt("rotationDegrees", 0).let { if (it in setOf(0, 90, 180, 270)) it else 0 }
             overlayText = document.optString("textOverlay", "").take(120)
             val savedAudioUri = document.optString("backgroundAudioUri", "")
@@ -1118,6 +1177,9 @@ class EditorActivity : Activity() {
             }
             brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
             contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
+            hueSeek.progress = (colorGrade.hueAdjustmentDegrees + 180f).toInt().coerceIn(0, 360)
+            saturationSeek.progress = (colorGrade.saturationAdjustment + 100f).toInt().coerceIn(0, 200)
+            lightnessSeek.progress = (colorGrade.lightnessAdjustment + 100f).toInt().coerceIn(0, 200)
             updateColorValues()
             refreshRotationControls()
             refreshTextOverlay()
@@ -1226,9 +1288,21 @@ class EditorActivity : Activity() {
     private fun updateColorValues() {
         brightnessValue = ((brightnessSeek.progress - 100) / 100f).coerceIn(-1f, 1f)
         contrastValue = ((contrastSeek.progress - 100) / 100f).coerceIn(-1f, 1f)
-        effectSummary.text = "Brightness ${String.format(Locale.ROOT, "%.2f", brightnessValue)}  ·  Contrast ${String.format(Locale.ROOT, "%.2f", contrastValue)}"
+        colorGrade = ColorGradeSettings(
+            hueAdjustmentDegrees = (hueSeek.progress - 180).toFloat(),
+            saturationAdjustment = (saturationSeek.progress - 100).toFloat(),
+            lightnessAdjustment = (lightnessSeek.progress - 100).toFloat()
+        )
+        effectSummary.text = buildString {
+            append("Brightness ").append(String.format(Locale.ROOT, "%.2f", brightnessValue))
+            append(" · Contrast ").append(String.format(Locale.ROOT, "%.2f", contrastValue))
+            append("\nHue ").append(colorGrade.hueAdjustmentDegrees.toInt()).append("°")
+            append(" · Saturation ").append(colorGrade.saturationAdjustment.toInt())
+            append(" · Lightness ").append(colorGrade.lightnessAdjustment.toInt())
+        }
         player?.setVideoEffects(buildVideoEffects())
     }
+
 
     /**
      * Transformer requires every audio-bearing item in a Composition to output 16-bit PCM
@@ -1260,6 +1334,18 @@ class EditorActivity : Activity() {
         val effects = mutableListOf<Effect>()
         if (abs(brightnessValue) > 0.001f) effects.add(Brightness(brightnessValue))
         if (abs(contrastValue) > 0.001f) effects.add(Contrast(contrastValue))
+        if (abs(colorGrade.hueAdjustmentDegrees) > 0.001f ||
+            abs(colorGrade.saturationAdjustment) > 0.001f ||
+            abs(colorGrade.lightnessAdjustment) > 0.001f
+        ) {
+            effects.add(
+                HslAdjustment.Builder()
+                    .adjustHue(colorGrade.hueAdjustmentDegrees)
+                    .adjustSaturation(colorGrade.saturationAdjustment)
+                    .adjustLightness(colorGrade.lightnessAdjustment)
+                    .build()
+            )
+        }
         if (rotationDegrees != 0) {
             effects.add(ScaleAndRotateTransformation.Builder().setRotationDegrees(rotationDegrees.toFloat()).build())
         }
