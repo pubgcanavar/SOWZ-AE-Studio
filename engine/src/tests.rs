@@ -303,3 +303,51 @@ fn clipboard_rejects_unknown_schema_and_oversized_payloads() {
     assert!(crate::LayerClipboard::decode(&bytes).is_err());
     assert!(crate::LayerClipboard::decode(&vec![0; crate::LayerClipboard::MAX_BYTES + 1]).is_err());
 }
+
+
+#[test]
+fn inspector_property_update_is_atomic_and_undoable() {
+    let mut engine = EditorEngine::new(project()).expect("valid test project");
+    engine.execute(Command::AddLayer {
+        composition_id: 2,
+        track_id: 3,
+        name: "Title".to_owned(),
+        kind: LayerKind::Text,
+        asset_id: None,
+        start_frame: 0,
+        duration_frames: 90,
+    }).expect("layer should be added");
+    let layer_id = engine.project().compositions[0].tracks[0].layers[0].id;
+    let before = engine.project().clone();
+
+    assert!(engine.execute(Command::SetLayerProperties {
+        layer_id,
+        name: "Invalid timing".to_owned(),
+        start_frame: 20,
+        duration_frames: 0,
+        transform: crate::Transform::default(),
+    }).is_err());
+    assert_eq!(*engine.project(), before);
+
+    engine.execute(Command::SetLayerProperties {
+        layer_id,
+        name: "Updated title".to_owned(),
+        start_frame: 12,
+        duration_frames: 60,
+        transform: crate::Transform {
+            position_x: 220.0,
+            opacity: 0.75,
+            ..crate::Transform::default()
+        },
+    }).expect("valid property update should succeed");
+
+    let layer = &engine.project().compositions[0].tracks[0].layers[0];
+    assert_eq!(layer.name, "Updated title");
+    assert_eq!(layer.start_frame, 12);
+    assert_eq!(layer.duration_frames, 60);
+    assert_eq!(layer.transform.position_x, 220.0);
+    assert_eq!(layer.transform.opacity, 0.75);
+
+    assert!(engine.undo());
+    assert_eq!(*engine.project(), before);
+}
