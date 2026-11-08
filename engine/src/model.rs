@@ -21,6 +21,8 @@ pub enum ProjectError {
     IdExhausted,
     #[error("The requested item was not found")]
     NotFound,
+    #[error("The target track is locked")]
+    TrackLocked,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
