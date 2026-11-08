@@ -4,7 +4,7 @@ Updated: 2026-10-25
 
 This roadmap uses public product feature lists, official AndroidX Media3 APIs, and public/licensed file-format research. It does not use leaked private data, credentials, hidden endpoints or access-control bypasses.
 
-## Delivered foundation — 0.8.0 (0.6.0 foundation plus editable queue and per-clip trims)
+## Delivered foundation — 0.9.0 (editable queue, per-clip trims and Undo/Redo)
 
 - Local source video import and main-clip playback preview.
 - IN/OUT trim handles for the main clip.
@@ -12,6 +12,7 @@ This roadmap uses public product feature lists, official AndroidX Media3 APIs, a
 - Per-clip queue controls: move clips up/down, duplicate an entry, or remove an entry. Project serialization and MP4 export use the same list order.
 - Independent IN/OUT source trim for each additional clip, read from source duration off the UI thread and applied to the corresponding Media3 ClippingConfiguration.
 - Backward-compatible `.sowzproj` parsing: legacy string URI entries remain readable; new object entries store each clip's IN/OUT points.
+- Bounded 50-snapshot Undo/Redo for queue edits (add, move, duplicate, remove and per-clip trim); a new edit clears the redo branch, and loading a project resets history.
 - Real brightness, contrast, quarter-turn rotation and static text/watermark overlay effects on preview and export.
 - Standard 3D `.cube` CC LUT import, parsing and application via Media3 `SingleColorLut`.
 - Save/reopen `.sowzproj` with source URI references, edit settings, text, LUT and clip queue.
@@ -21,7 +22,7 @@ This roadmap uses public product feature lists, official AndroidX Media3 APIs, a
 
 ## Next milestone — independent clip editing
 
-- Add undo/redo command history and a timeline selection model for queue operations.
+- Add a selected-clip inspector, frame-step controls and a zoomable time ruler.
 - Persist and restore document permissions; detect missing/revoked source URIs and offer relinking before export.
 - Add frame-accurate split, duplicate-at-playhead and clip snapping.
 - Show export progress, cancel safely, check free storage and clean temporary files after failure.

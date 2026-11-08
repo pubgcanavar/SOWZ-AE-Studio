@@ -49,6 +49,8 @@ import androidx.media3.ui.PlayerView
 import com.sowz.aestudio.core.CubeLutData
 import com.sowz.aestudio.core.CubeLutParser
 import com.sowz.aestudio.core.ClipTrimRange
+import com.sowz.aestudio.core.ClipQueueSnapshot
+import com.sowz.aestudio.core.EditHistory
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -81,6 +83,7 @@ class EditorActivity : Activity() {
     private val additionalClipUris = mutableListOf<Uri>()
     // Kept index-aligned with additionalClipUris; duplicated source URIs can have different trim ranges.
     private val additionalClipTrims = mutableListOf<ClipTrimRange>()
+    private val clipQueueHistory = EditHistory(ClipQueueSnapshot(emptyList(), emptyList()))
     private var pendingExportUri: Uri? = null
     private var temporaryOutput: File? = null
     private var durationMs = 0L
@@ -108,6 +111,8 @@ class EditorActivity : Activity() {
     private lateinit var trimSummary: TextView
     private lateinit var clipQueueSummary: TextView
     private lateinit var clipQueueControls: LinearLayout
+    private lateinit var undoQueueButton: TextView
+    private lateinit var redoQueueButton: TextView
     private lateinit var brightnessSeek: SeekBar
     private lateinit var contrastSeek: SeekBar
     private lateinit var effectSummary: TextView
@@ -347,6 +352,15 @@ class EditorActivity : Activity() {
         add(timelinePanel, clipQueueSummary, top = 9)
         clipQueueControls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(timelinePanel, clipQueueControls, top = 8)
+        val historyRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        undoQueueButton = button("↶  Undo", secondary = true) { undoQueueEdit() }
+        redoQueueButton = button("↷  Redo", secondary = true) { redoQueueEdit() }
+        historyRow.addView(undoQueueButton, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6f) })
+        historyRow.addView(redoQueueButton, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(6f) })
+        add(timelinePanel, historyRow, top = 8)
         add(timelinePanel, button("＋  Add videos to final cut") { pickAdditionalClips() }, top = 10)
         refreshClipQueueSummary()
         add(content, timelinePanel, bottom = 13)
@@ -465,6 +479,7 @@ class EditorActivity : Activity() {
         restoreEndMs = null
         additionalClipUris.clear()
         additionalClipTrims.clear()
+        resetQueueHistory()
         refreshClipQueueSummary()
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -513,6 +528,7 @@ class EditorActivity : Activity() {
             additionalClipTrims.add(ClipTrimRange())
             added++
         }
+        if (added > 0) recordQueueEdit()
         refreshClipQueueSummary()
         toast(if (added > 0) "Added $added clip(s) to the final cut." else "No new clips were added.")
     }
@@ -610,6 +626,7 @@ class EditorActivity : Activity() {
                 val endMs = (endSeconds * 1000.0).toLong()
                 try {
                     additionalClipTrims[index] = ClipTrimRange(startMs, endMs).clampToDuration(sourceDurationMs)
+                    recordQueueEdit()
                 } catch (error: IllegalArgumentException) {
                     outField.error = error.message
                     return@setOnClickListener
@@ -623,6 +640,62 @@ class EditorActivity : Activity() {
         dialog.show()
     }
 
+    private fun currentQueueSnapshot(): ClipQueueSnapshot =
+        ClipQueueSnapshot(
+            uriStrings = additionalClipUris.map { it.toString() },
+            trims = additionalClipTrims.toList()
+        )
+
+    private fun recordQueueEdit() {
+        clipQueueHistory.commit(currentQueueSnapshot())
+        refreshQueueHistoryButtons()
+    }
+
+    private fun resetQueueHistory() {
+        clipQueueHistory.reset(currentQueueSnapshot())
+        refreshQueueHistoryButtons()
+    }
+
+    private fun restoreQueueSnapshot(snapshot: ClipQueueSnapshot) {
+        additionalClipUris.clear()
+        snapshot.uriStrings.forEach { additionalClipUris.add(Uri.parse(it)) }
+        additionalClipTrims.clear()
+        additionalClipTrims.addAll(snapshot.trims)
+        refreshClipQueueSummary()
+    }
+
+    private fun undoQueueEdit() {
+        val snapshot = clipQueueHistory.undo()
+        if (snapshot == null) {
+            toast("Nothing to undo.")
+            return
+        }
+        restoreQueueSnapshot(snapshot)
+        refreshQueueHistoryButtons()
+        status.text = "Undo completed."
+        status.setTextColor(muted)
+    }
+
+    private fun redoQueueEdit() {
+        val snapshot = clipQueueHistory.redo()
+        if (snapshot == null) {
+            toast("Nothing to redo.")
+            return
+        }
+        restoreQueueSnapshot(snapshot)
+        refreshQueueHistoryButtons()
+        status.text = "Redo completed."
+        status.setTextColor(green)
+    }
+
+    private fun refreshQueueHistoryButtons() {
+        if (!::undoQueueButton.isInitialized || !::redoQueueButton.isInitialized) return
+        undoQueueButton.isEnabled = clipQueueHistory.canUndo
+        undoQueueButton.alpha = if (clipQueueHistory.canUndo) 1f else 0.42f
+        redoQueueButton.isEnabled = clipQueueHistory.canRedo
+        redoQueueButton.alpha = if (clipQueueHistory.canRedo) 1f else 0.42f
+    }
+
     private fun refreshClipQueueSummary() {
         if (!::clipQueueSummary.isInitialized || !::clipQueueControls.isInitialized) return
         val mainName = if (::sourceLabel.isInitialized && sourceLabel.text.isNotBlank()) {
@@ -634,6 +707,7 @@ class EditorActivity : Activity() {
 
         if (additionalClipUris.isEmpty()) {
             clipQueueControls.addView(body("No added clips yet. Import videos to build your sequence.", 11f, muted))
+            refreshQueueHistoryButtons()
             return
         }
 
@@ -670,6 +744,7 @@ class EditorActivity : Activity() {
                 LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6f) }
             )
         }
+        refreshQueueHistoryButtons()
     }
 
     private fun queueAction(glyph: String, hint: String, enabled: Boolean, action: () -> Unit): TextView =
@@ -695,6 +770,7 @@ class EditorActivity : Activity() {
         additionalClipUris.addAll(reordered)
         additionalClipTrims.clear()
         additionalClipTrims.addAll(reorderedTrims)
+        recordQueueEdit()
         refreshClipQueueSummary()
         status.text = "Clip moved. Export order updated."
         status.setTextColor(green)
@@ -708,6 +784,7 @@ class EditorActivity : Activity() {
         }
         additionalClipUris.add(index + 1, uri)
         additionalClipTrims.add(index + 1, additionalClipTrims.getOrElse(index) { ClipTrimRange() })
+        recordQueueEdit()
         refreshClipQueueSummary()
         status.text = "Clip duplicated in the sequence."
         status.setTextColor(green)
@@ -725,6 +802,7 @@ class EditorActivity : Activity() {
                 additionalClipUris.clear()
                 additionalClipUris.addAll(updated)
                 if (index in additionalClipTrims.indices) additionalClipTrims.removeAt(index)
+                recordQueueEdit()
                 refreshClipQueueSummary()
                 status.text = "Clip removed from sequence. Source media is unchanged."
                 status.setTextColor(muted)
@@ -821,7 +899,7 @@ class EditorActivity : Activity() {
                     }
                 })
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 0.8.0")
+                .put("createdWith", "SOWZ AE Studio 0.9.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
@@ -872,6 +950,7 @@ class EditorActivity : Activity() {
                     additionalClipTrims.add(range)
                 }
             }
+            resetQueueHistory()
             refreshClipQueueSummary()
             val start = document.optLong("trimStartMs", 0L)
             val end = document.optLong("trimEndMs", 0L)
