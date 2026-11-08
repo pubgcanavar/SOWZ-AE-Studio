@@ -404,3 +404,51 @@ fn package_rejects_missing_embedded_assets_and_round_trips_present_ones() {
     assert_eq!(loaded.project, value);
     assert_eq!(loaded.files.get("assets/images/cover.png"), Some(&vec![9, 8, 7, 6]));
 }
+
+
+#[test]
+fn locked_tracks_reject_edits_without_mutating_the_project() {
+    let mut engine = EditorEngine::new(project()).expect("valid test project");
+    engine.execute(Command::AddLayer {
+        composition_id: 2,
+        track_id: 3,
+        name: "Protected clip".to_owned(),
+        kind: LayerKind::Footage,
+        asset_id: None,
+        start_frame: 0,
+        duration_frames: 60,
+    }).expect("layer should be added");
+    let layer_id = engine.project().compositions[0].tracks[0].layers[0].id;
+    engine.execute(Command::SetTrackFlags {
+        track_id: 3,
+        muted: false,
+        locked: true,
+        visible: true,
+    }).expect("track should lock");
+
+    let before = engine.project().clone();
+    assert!(engine.execute(Command::MoveLayer { layer_id, new_start_frame: 20 }).is_err());
+    assert!(engine.execute(Command::RemoveLayer { layer_id }).is_err());
+    assert!(engine.execute(Command::AddLayer {
+        composition_id: 2,
+        track_id: 3,
+        name: "Blocked clip".to_owned(),
+        kind: LayerKind::Footage,
+        asset_id: None,
+        start_frame: 0,
+        duration_frames: 20,
+    }).is_err());
+    assert_eq!(*engine.project(), before);
+
+    engine.execute(Command::SetTrackFlags {
+        track_id: 3,
+        muted: true,
+        locked: false,
+        visible: false,
+    }).expect("track flags should still be editable while locked");
+    assert!(engine.execute(Command::MoveLayer { layer_id, new_start_frame: 20 }).is_ok());
+    let track = &engine.project().compositions[0].tracks[0];
+    assert!(track.muted);
+    assert!(!track.visible);
+    assert!(!track.locked);
+}
