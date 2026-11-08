@@ -555,6 +555,24 @@ impl eframe::App for SowzAeApp {
                             if ui.selectable_label(self.selected_track_id == track.id, format!("{marker}  {}", track.name)).clicked() {
                                 self.selected_track_id = track.id;
                             }
+                            let mut muted = track.muted;
+                            if ui.checkbox(&mut muted, "M").changed() {
+                                self.execute(Command::SetTrackFlags {
+                                    track_id: track.id, muted, locked: track.locked, visible: track.visible,
+                                });
+                            }
+                            let mut locked = track.locked;
+                            if ui.checkbox(&mut locked, "Lock").changed() {
+                                self.execute(Command::SetTrackFlags {
+                                    track_id: track.id, muted: track.muted, locked, visible: track.visible,
+                                });
+                            }
+                            let mut visible = track.visible;
+                            if ui.checkbox(&mut visible, "Show").changed() {
+                                self.execute(Command::SetTrackFlags {
+                                    track_id: track.id, muted: track.muted, locked: track.locked, visible,
+                                });
+                            }
                         });
                         for layer in &track.layers {
                             ui.horizontal(|ui| {
