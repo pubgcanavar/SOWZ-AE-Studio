@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
 };
 
-use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use sowz_ae_core::{
     Command, EditorEngine, Layer, LayerClipboard, LayerKind, LoadedPackage,
     Project, TrackKind, Transform, load_package, save_package,
@@ -34,7 +34,7 @@ struct SowzAeApp {
 }
 
 impl SowzAeApp {
-    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    fn new() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let project = Project::new(
             "Untitled Project",
             DEFAULT_WIDTH,
@@ -549,7 +549,7 @@ impl eframe::App for SowzAeApp {
                             let width = ui.available_width().max(240.0);
                             let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
                             let painter = ui.painter_at(rect);
-                            painter.rect_filled(rect, 4.0, Color32::from_rgb(25, 27, 32));
+                            painter.rect_filled(rect, 4, Color32::from_rgb(25, 27, 32));
                             let scale = rect.width() / composition.duration_frames.max(1) as f32;
                             for layer in &track.layers {
                                 let left = rect.left() + layer.start_frame as f32 * scale;
@@ -560,8 +560,8 @@ impl eframe::App for SowzAeApp {
                                 );
                                 let selected = self.selected_layer_id == Some(layer.id);
                                 let fill = if selected { accent } else { Color32::from_rgb(74, 104, 135) };
-                                painter.rect_filled(block, 4.0, fill);
-                                painter.rect_stroke(block, 4.0, Stroke::new(1.0, Color32::from_rgb(15, 17, 20)), StrokeKind::Inside);
+                                painter.rect_filled(block, 4, fill);
+                                painter.rect_stroke(block, 4, Stroke::new(1.0, Color32::from_rgb(15, 17, 20)), StrokeKind::Inside);
                                 painter.text(block.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, &layer.name, FontId::proportional(11.0), Color32::WHITE);
                                 let response = ui.interact(block, Id::new(("timeline_layer", layer.id)), Sense::click());
                                 if response.clicked() {
@@ -586,8 +586,8 @@ impl eframe::App for SowzAeApp {
                 let available = ui.available_size();
                 let canvas_size = vec2(available.x.max(180.0), (available.y - 100.0).max(100.0));
                 let (canvas, _) = ui.allocate_exact_size(canvas_size, Sense::hover());
-                ui.painter().rect_filled(canvas, 5.0, Color32::from_rgb(10, 11, 14));
-                ui.painter().rect_stroke(canvas, 5.0, Stroke::new(1.0, Color32::from_rgb(55, 59, 67)), StrokeKind::Inside);
+                ui.painter().rect_filled(canvas, 5, Color32::from_rgb(10, 11, 14));
+                ui.painter().rect_stroke(canvas, 5, Stroke::new(1.0, Color32::from_rgb(55, 59, 67)), StrokeKind::Inside);
                 ui.painter().text(
                     canvas.center(),
                     Align2::CENTER_CENTER,
