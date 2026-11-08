@@ -167,7 +167,7 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
             right.id = project.allocate_id()?;
             right.start_frame = at_frame;
             right.duration_frames = original.duration_frames - split_offset;
-            right.name = format!("{} (split)", original.name);
+            right.name = original.name.clone();
 
             for effect in &mut right.effects {
                 effect.id = project.allocate_id()?;
