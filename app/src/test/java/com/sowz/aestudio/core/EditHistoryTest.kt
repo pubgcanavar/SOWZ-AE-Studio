@@ -7,6 +7,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EditHistoryTest {
+    @Test fun clipQueueSnapshotDefaultsEveryClipToOneX() {
+        val snapshot = ClipQueueSnapshot(
+            uriStrings = listOf("a", "b"),
+            trims = listOf(ClipTrimRange(), ClipTrimRange())
+        )
+        assertEquals(listOf(1f, 1f), snapshot.speeds)
+    }
+
+    @Test fun clipQueueSnapshotRejectsInvalidSpeed() {
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            ClipQueueSnapshot(
+                uriStrings = listOf("a"),
+                trims = listOf(ClipTrimRange()),
+                speeds = listOf(8f)
+            )
+        }
+    }
+
     @Test fun undoReturnsPreviousCommittedState() {
         val history = EditHistory(listOf("a"))
         history.commit(listOf("a", "b"))
