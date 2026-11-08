@@ -159,6 +159,10 @@ impl Project {
                 }
             }
         }
+        let highest_id = ids.iter().copied().max().unwrap_or(0);
+        if self.next_id <= highest_id {
+            return Err(ProjectError::Invalid("next_id must be greater than every allocated identifier".to_owned()));
+        }
         Ok(())
     }
 }
