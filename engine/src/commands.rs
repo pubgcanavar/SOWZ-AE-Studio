@@ -20,6 +20,9 @@ pub enum Command {
         duration_frames: u64,
     },
     MoveLayer { layer_id: u64, new_start_frame: u64 },
+    DuplicateLayer { layer_id: u64, new_start_frame: u64 },
+    SplitLayer { layer_id: u64, at_frame: u64 },
+    ReorderLayer { layer_id: u64, new_index: usize },
     TrimLayer { layer_id: u64, new_duration_frames: u64 },
     SetLayerTransform { layer_id: u64, transform: Transform },
     SetLayerEnabled { layer_id: u64, enabled: bool },
@@ -125,6 +128,69 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
         Command::MoveLayer { layer_id, new_start_frame } => {
             find_layer_mut(project, layer_id)?.start_frame = new_start_frame;
         }
+        Command::DuplicateLayer { layer_id, new_start_frame } => {
+            let mut duplicate = find_layer(project, layer_id)?.clone();
+            duplicate.id = project.allocate_id()?;
+            duplicate.start_frame = new_start_frame;
+            for effect in &mut duplicate.effects {
+                effect.id = project.allocate_id()?;
+            }
+            for keyframe in &mut duplicate.keyframes {
+                keyframe.id = project.allocate_id()?;
+            }
+
+            let mut inserted = false;
+            for composition in &mut project.compositions {
+                for track in &mut composition.tracks {
+                    if track.layers.iter().any(|layer| layer.id == layer_id) {
+                        track.layers.push(duplicate);
+                        inserted = true;
+                        break;
+                    }
+                }
+                if inserted { break; }
+            }
+            if !inserted {
+                return Err(ProjectError::NotFound);
+            }
+        }
+        Command::SplitLayer { layer_id, at_frame } => {
+            let (composition_index, track_index, layer_index, original) =
+                find_layer_location(project, layer_id)?;
+            let split_offset = at_frame.checked_sub(original.start_frame)
+                .ok_or_else(|| ProjectError::Invalid("split point is before the layer".to_owned()))?;
+            if split_offset == 0 || split_offset >= original.duration_frames {
+                return Err(ProjectError::Invalid("split point must be inside the layer".to_owned()));
+            }
+
+            let mut right = original.clone();
+            right.id = project.allocate_id()?;
+            right.start_frame = at_frame;
+            right.duration_frames = original.duration_frames - split_offset;
+            right.name = format!("{} (split)", original.name);
+
+            for effect in &mut right.effects {
+                effect.id = project.allocate_id()?;
+            }
+            right.keyframes.retain(|keyframe| keyframe.frame >= split_offset);
+            for keyframe in &mut right.keyframes {
+                keyframe.id = project.allocate_id()?;
+                keyframe.frame -= split_offset;
+            }
+
+            let left = &mut project.compositions[composition_index].tracks[track_index].layers[layer_index];
+            left.duration_frames = split_offset;
+            left.keyframes.retain(|keyframe| keyframe.frame <= split_offset);
+            project.compositions[composition_index].tracks[track_index]
+                .layers.insert(layer_index + 1, right);
+        }
+        Command::ReorderLayer { layer_id, new_index } => {
+            let (composition_index, track_index, layer_index, _) = find_layer_location(project, layer_id)?;
+            let layers = &mut project.compositions[composition_index].tracks[track_index].layers;
+            let layer = layers.remove(layer_index);
+            let destination = new_index.min(layers.len());
+            layers.insert(destination, layer);
+        }
         Command::TrimLayer { layer_id, new_duration_frames } => {
             find_layer_mut(project, layer_id)?.duration_frames = new_duration_frames;
         }
@@ -170,6 +236,32 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
         }
     }
     Ok(())
+}
+
+fn find_layer<'a>(project: &'a Project, layer_id: u64) -> Result<&'a Layer, ProjectError> {
+    for composition in &project.compositions {
+        for track in &composition.tracks {
+            if let Some(layer) = track.layers.iter().find(|item| item.id == layer_id) {
+                return Ok(layer);
+            }
+        }
+    }
+    Err(ProjectError::NotFound)
+}
+
+fn find_layer_location(
+    project: &Project,
+    layer_id: u64,
+) -> Result<(usize, usize, usize, Layer), ProjectError> {
+    for (composition_index, composition) in project.compositions.iter().enumerate() {
+        for (track_index, track) in composition.tracks.iter().enumerate() {
+            if let Some((layer_index, layer)) = track.layers.iter().enumerate()
+                .find(|(_, item)| item.id == layer_id) {
+                return Ok((composition_index, track_index, layer_index, layer.clone()));
+            }
+        }
+    }
+    Err(ProjectError::NotFound)
 }
 
 fn find_layer_mut(project: &mut Project, layer_id: u64) -> Result<&mut Layer, ProjectError> {
