@@ -21,6 +21,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
@@ -53,6 +54,7 @@ import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
+import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.ui.PlayerView
 import com.sowz.aestudio.core.CubeLutData
@@ -150,7 +152,33 @@ class EditorActivity : Activity() {
     private lateinit var rotationSummary: TextView
     private val rotationButtons = mutableMapOf<Int, TextView>()
     private lateinit var textOverlaySummary: TextView
+    private lateinit var exportProgressBar: ProgressBar
     private lateinit var exportButton: TextView
+
+    private val exportProgressHolder = ProgressHolder()
+    private val syncExportProgress = object : Runnable {
+        override fun run() {
+            val active = transformer ?: return
+            try {
+                val state = active.getProgress(exportProgressHolder)
+                if (state == Transformer.PROGRESS_STATE_AVAILABLE) {
+                    val percent = exportProgressHolder.progress.coerceIn(0, 100)
+                    if (::exportProgressBar.isInitialized) {
+                        exportProgressBar.progress = percent
+                        exportProgressBar.visibility = View.VISIBLE
+                    }
+                    if (::status.isInitialized && !exportButton.isEnabled) {
+                        status.text = "Rendering " + percent + "% · " + exportClipCount + " clip(s)"
+                    }
+                }
+                if (state != Transformer.PROGRESS_STATE_NOT_STARTED) {
+                    handler.postDelayed(this, 500L)
+                }
+            } catch (_: Exception) {
+                // Completion/error callbacks remain authoritative.
+            }
+        }
+    }
 
     private val syncPlayback = object : Runnable {
         override fun run() {
@@ -196,6 +224,7 @@ class EditorActivity : Activity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(syncPlayback)
+        handler.removeCallbacks(syncExportProgress)
         transformer?.cancel()
         playerView.player = null
         player?.release()
@@ -623,6 +652,12 @@ class EditorActivity : Activity() {
         add(exportPanel, button("Save project (.sowzproj)", secondary = true) { startProjectSavePicker() }, top = 10)
         status = body("Ready when a video is imported.", 12f, green)
         add(exportPanel, status, top = 11)
+        exportProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 0
+            visibility = View.GONE
+        }
+        add(exportPanel, exportProgressBar, top = 9)
         exportButton = button("Export trimmed MP4") { startExportPicker() }
         add(exportPanel, exportButton, top = 10)
         add(exportPanel, button("Cancel export", secondary = true) { cancelExport() }, top = 8)
@@ -1735,6 +1770,22 @@ class EditorActivity : Activity() {
         }
     }
 
+    private fun startExportProgressPolling() {
+        handler.removeCallbacks(syncExportProgress)
+        handler.post(syncExportProgress)
+    }
+
+    private fun stopExportProgressPolling() {
+        handler.removeCallbacks(syncExportProgress)
+    }
+
+    private fun resetExportProgressUi() {
+        if (::exportProgressBar.isInitialized) {
+            exportProgressBar.progress = 0
+            exportProgressBar.visibility = View.GONE
+        }
+    }
+
     private fun beginExport() {
         val source = sourceUri
         val destination = pendingExportUri
@@ -1803,6 +1854,8 @@ class EditorActivity : Activity() {
         val activeTransformer = Transformer.Builder(this)
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+                    stopExportProgressPolling()
+                    if (::exportProgressBar.isInitialized) exportProgressBar.progress = 100
                     copyExportToDestination(temp, destination)
                 }
 
@@ -1812,6 +1865,8 @@ class EditorActivity : Activity() {
                     exportException: ExportException
                 ) {
                     runOnUiThread {
+                        stopExportProgressPolling()
+                        resetExportProgressUi()
                         status.text = "Export failed: ${exportException.message ?: exportException.errorCodeName}"
                         status.setTextColor(accent)
                         exportButton.isEnabled = true
@@ -1825,7 +1880,10 @@ class EditorActivity : Activity() {
         transformer = activeTransformer
         try {
             activeTransformer.start(composition, temp.absolutePath)
+            startExportProgressPolling()
         } catch (error: Exception) {
+            stopExportProgressPolling()
+            resetExportProgressUi()
             status.text = "Could not start export: ${error.message ?: "unknown error"}"
             status.setTextColor(accent)
             exportButton.isEnabled = true
@@ -1844,44 +1902,31 @@ class EditorActivity : Activity() {
                     ?: error("Could not open the selected export location.")
                 output.use { sink -> temp.inputStream().use { input -> input.copyTo(sink) } }
                 runOnUiThread {
-                    status.text = "Export complete · ${exportClipCount} clip(s) · ${temp.length() / 1024L} KB written."
+                    stopExportProgressPolling()
+                    status.text = "Export complete · " + exportClipCount + " clip(s) · " + (temp.length() / 1024L) + " KB written."
                     status.setTextColor(green)
                     toast("MP4 export completed.")
                     exportButton.isEnabled = true
                     exportButton.alpha = 1f
                     temporaryOutput = null
                     transformer = null
+                    resetExportProgressUi()
                     temp.delete()
                 }
             } catch (error: Exception) {
                 runOnUiThread {
-                    status.text = "Could not save exported video: ${error.message ?: "unknown error"}"
+                    stopExportProgressPolling()
+                    status.text = "Could not save exported video: " + (error.message ?: "unknown error")
                     status.setTextColor(accent)
                     exportButton.isEnabled = true
                     exportButton.alpha = 1f
                     temporaryOutput = null
                     transformer = null
+                    resetExportProgressUi()
                     temp.delete()
                 }
             }
         }.start()
-    }
-
-    private fun cancelExport() {
-        val active = transformer
-        if (active == null) {
-            toast("There is no active export to cancel.")
-            return
-        }
-        active.cancel()
-        temporaryOutput?.delete()
-        temporaryOutput = null
-        transformer = null
-        status.text = "Export cancelled."
-        status.setTextColor(muted)
-        exportButton.isEnabled = true
-        exportButton.alpha = 1f
-        toast("Export cancelled.")
     }
 
     private fun queryDisplayName(uri: Uri): String {
