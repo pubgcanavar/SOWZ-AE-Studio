@@ -6,10 +6,15 @@ package com.sowz.aestudio.core
  */
 data class ClipQueueSnapshot(
     val uriStrings: List<String>,
-    val trims: List<ClipTrimRange>
+    val trims: List<ClipTrimRange>,
+    val speeds: List<Float> = List(uriStrings.size) { 1f }
 ) {
     init {
         require(uriStrings.size == trims.size) { "Each queued source must have exactly one trim range." }
+        require(uriStrings.size == speeds.size) { "Each queued source must have exactly one speed value." }
+        require(speeds.all { it.isFinite() && it in 0.25f..4f }) {
+            "Clip speed must be between 0.25x and 4.0x."
+        }
     }
 }
 
