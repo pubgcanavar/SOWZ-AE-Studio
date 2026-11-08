@@ -306,6 +306,73 @@ impl Default for Transform {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LayerClipboard {
+    pub schema_version: u32,
+    pub layer: Layer,
+}
+
+impl LayerClipboard {
+    pub const SCHEMA_VERSION: u32 = 1;
+    pub const MAX_BYTES: usize = 4 * 1024 * 1024;
+
+    pub fn new(layer: &Layer) -> Self {
+        Self { schema_version: Self::SCHEMA_VERSION, layer: layer.clone() }
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>, ProjectError> {
+        let bytes = serde_json::to_vec(self)
+            .map_err(|error| ProjectError::Invalid(format!("clipboard encoding failed: {error}")))?;
+        if bytes.len() > Self::MAX_BYTES {
+            return Err(ProjectError::Invalid("clipboard payload exceeds the size limit".to_owned()));
+        }
+        Ok(bytes)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ProjectError> {
+        if bytes.len() > Self::MAX_BYTES {
+            return Err(ProjectError::Invalid("clipboard payload exceeds the size limit".to_owned()));
+        }
+        let clipboard: Self = serde_json::from_slice(bytes)
+            .map_err(|error| ProjectError::Invalid(format!("clipboard data is invalid: {error}")))?;
+        if clipboard.schema_version != Self::SCHEMA_VERSION {
+            return Err(ProjectError::Invalid("unsupported clipboard schema version".to_owned()));
+        }
+        validate_clipboard_layer(&clipboard.layer)?;
+        Ok(clipboard)
+    }
+}
+
+fn validate_clipboard_layer(layer: &Layer) -> Result<(), ProjectError> {
+    validate_name("layer", &layer.name)?;
+    if layer.duration_frames == 0 || layer.start_frame.checked_add(layer.duration_frames).is_none() {
+        return Err(ProjectError::Invalid("clipboard layer timing is invalid".to_owned()));
+    }
+    validate_transform(&layer.transform)?;
+    if layer.effects.len() > MAX_EFFECTS_PER_LAYER || layer.keyframes.len() > MAX_KEYFRAMES_PER_LAYER {
+        return Err(ProjectError::Invalid("clipboard layer exceeds the effect or keyframe limit".to_owned()));
+    }
+    let mut ids = HashSet::new();
+    insert_id(&mut ids, layer.id)?;
+    for effect in &layer.effects {
+        insert_id(&mut ids, effect.id)?;
+        validate_name("effect", &effect.effect_type)?;
+        for (key, value) in &effect.parameters {
+            validate_name("effect parameter", key)?;
+            validate_parameter(value)?;
+        }
+    }
+    for keyframe in &layer.keyframes {
+        insert_id(&mut ids, keyframe.id)?;
+        validate_name("keyframe property", &keyframe.property)?;
+        validate_property_value(&keyframe.value)?;
+        if keyframe.frame > layer.duration_frames {
+            return Err(ProjectError::Invalid("clipboard keyframe lies outside its layer duration".to_owned()));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Effect {
     pub id: u64,
     pub effect_type: String,
