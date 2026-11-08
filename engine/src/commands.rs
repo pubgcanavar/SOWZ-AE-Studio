@@ -1,0 +1,197 @@
+use std::collections::BTreeMap;
+
+use crate::model::{
+    Effect, Interpolation, Keyframe, Layer, LayerKind, ParameterValue, Project,
+    ProjectError, PropertyValue, Track, TrackKind, Transform,
+};
+
+const MAX_HISTORY: usize = 100;
+
+#[derive(Clone, Debug)]
+pub enum Command {
+    AddTrack { composition_id: u64, name: String, kind: TrackKind },
+    AddLayer {
+        composition_id: u64,
+        track_id: u64,
+        name: String,
+        kind: LayerKind,
+        asset_id: Option<u64>,
+        start_frame: u64,
+        duration_frames: u64,
+    },
+    MoveLayer { layer_id: u64, new_start_frame: u64 },
+    TrimLayer { layer_id: u64, new_duration_frames: u64 },
+    SetLayerTransform { layer_id: u64, transform: Transform },
+    SetLayerEnabled { layer_id: u64, enabled: bool },
+    PutKeyframe {
+        layer_id: u64,
+        frame: u64,
+        property: String,
+        value: PropertyValue,
+        interpolation: Interpolation,
+    },
+    AddEffect { layer_id: u64, effect_type: String },
+    SetEffectParameter { effect_id: u64, name: String, value: ParameterValue },
+    RemoveLayer { layer_id: u64 },
+}
+
+pub struct EditorEngine {
+    project: Project,
+    undo_stack: Vec<Project>,
+    redo_stack: Vec<Project>,
+}
+
+impl EditorEngine {
+    pub fn new(project: Project) -> Result<Self, ProjectError> {
+        project.validate()?;
+        Ok(Self { project, undo_stack: Vec::new(), redo_stack: Vec::new() })
+    }
+
+    pub fn project(&self) -> &Project {
+        &self.project
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    /// Executes one atomic edit. A failed command leaves the live project unchanged.
+    pub fn execute(&mut self, command: Command) -> Result<(), ProjectError> {
+        let mut candidate = self.project.clone();
+        apply_command(&mut candidate, command)?;
+        candidate.validate()?;
+
+        self.undo_stack.push(self.project.clone());
+        if self.undo_stack.len() > MAX_HISTORY {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+        self.project = candidate;
+        Ok(())
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.redo_stack.push(self.project.clone());
+        self.project = previous;
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.undo_stack.push(self.project.clone());
+        if self.undo_stack.len() > MAX_HISTORY {
+            self.undo_stack.remove(0);
+        }
+        self.project = next;
+        true
+    }
+}
+
+fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectError> {
+    match command {
+        Command::AddTrack { composition_id, name, kind } => {
+            let id = project.allocate_id()?;
+            let composition = project.compositions.iter_mut()
+                .find(|item| item.id == composition_id)
+                .ok_or(ProjectError::NotFound)?;
+            composition.tracks.push(Track {
+                id, name, kind, muted: false, locked: false, visible: true, layers: Vec::new(),
+            });
+        }
+        Command::AddLayer {
+            composition_id, track_id, name, kind, asset_id, start_frame, duration_frames,
+        } => {
+            let id = project.allocate_id()?;
+            let composition = project.compositions.iter_mut()
+                .find(|item| item.id == composition_id)
+                .ok_or(ProjectError::NotFound)?;
+            let track = composition.tracks.iter_mut()
+                .find(|item| item.id == track_id)
+                .ok_or(ProjectError::NotFound)?;
+            track.layers.push(Layer {
+                id, name, kind, start_frame, duration_frames, asset_id,
+                enabled: true, transform: Transform::default(), effects: Vec::new(), keyframes: Vec::new(),
+            });
+        }
+        Command::MoveLayer { layer_id, new_start_frame } => {
+            find_layer_mut(project, layer_id)?.start_frame = new_start_frame;
+        }
+        Command::TrimLayer { layer_id, new_duration_frames } => {
+            find_layer_mut(project, layer_id)?.duration_frames = new_duration_frames;
+        }
+        Command::SetLayerTransform { layer_id, transform } => {
+            find_layer_mut(project, layer_id)?.transform = transform;
+        }
+        Command::SetLayerEnabled { layer_id, enabled } => {
+            find_layer_mut(project, layer_id)?.enabled = enabled;
+        }
+        Command::PutKeyframe { layer_id, frame, property, value, interpolation } => {
+            let id = project.allocate_id()?;
+            let layer = find_layer_mut(project, layer_id)?;
+            if let Some(existing) = layer.keyframes.iter_mut()
+                .find(|item| item.frame == frame && item.property == property) {
+                existing.value = value;
+                existing.interpolation = interpolation;
+            } else {
+                layer.keyframes.push(Keyframe { id, frame, property, value, interpolation });
+                layer.keyframes.sort_by_key(|item| item.frame);
+            }
+        }
+        Command::AddEffect { layer_id, effect_type } => {
+            let id = project.allocate_id()?;
+            let layer = find_layer_mut(project, layer_id)?;
+            layer.effects.push(Effect {
+                id, effect_type, enabled: true, parameters: BTreeMap::new(),
+            });
+        }
+        Command::SetEffectParameter { effect_id, name, value } => {
+            let effect = find_effect_mut(project, effect_id)?;
+            effect.parameters.insert(name, value);
+        }
+        Command::RemoveLayer { layer_id } => {
+            for composition in &mut project.compositions {
+                for track in &mut composition.tracks {
+                    if let Some(index) = track.layers.iter().position(|item| item.id == layer_id) {
+                        track.layers.remove(index);
+                        return Ok(());
+                    }
+                }
+            }
+            return Err(ProjectError::NotFound);
+        }
+    }
+    Ok(())
+}
+
+fn find_layer_mut(project: &mut Project, layer_id: u64) -> Result<&mut Layer, ProjectError> {
+    for composition in &mut project.compositions {
+        for track in &mut composition.tracks {
+            if let Some(layer) = track.layers.iter_mut().find(|item| item.id == layer_id) {
+                return Ok(layer);
+            }
+        }
+    }
+    Err(ProjectError::NotFound)
+}
+
+fn find_effect_mut(project: &mut Project, effect_id: u64) -> Result<&mut Effect, ProjectError> {
+    for composition in &mut project.compositions {
+        for track in &mut composition.tracks {
+            for layer in &mut track.layers {
+                if let Some(effect) = layer.effects.iter_mut().find(|item| item.id == effect_id) {
+                    return Ok(effect);
+                }
+            }
+        }
+    }
+    Err(ProjectError::NotFound)
+}
