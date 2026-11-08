@@ -103,7 +103,7 @@ class EditorActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var trimSummary: TextView
     private lateinit var clipQueueSummary: TextView
-    private lateinit var removeLastClipButton: TextView
+    private lateinit var clipQueueControls: LinearLayout
     private lateinit var brightnessSeek: SeekBar
     private lateinit var contrastSeek: SeekBar
     private lateinit var effectSummary: TextView
@@ -338,17 +338,12 @@ class EditorActivity : Activity() {
 
         val timelinePanel = panel()
         add(timelinePanel, label("Timeline sequence"))
-        add(timelinePanel, body("The main clip plays first. Add videos to play after it in order; the selected trim range applies to the main clip and added clips use their full duration.", 12f, muted), top = 5)
+        add(timelinePanel, body("Manage every queued clip: move it, duplicate it, or remove it. Export follows this order. The trim handles still apply to the main clip; added clips use their full duration.", 12f, muted), top = 5)
         clipQueueSummary = body("Main clip: none", 13f, white, true)
         add(timelinePanel, clipQueueSummary, top = 9)
+        clipQueueControls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        add(timelinePanel, clipQueueControls, top = 8)
         add(timelinePanel, button("＋  Add videos to final cut") { pickAdditionalClips() }, top = 10)
-        removeLastClipButton = button("Remove last added clip", secondary = true) {
-            if (additionalClipUris.isNotEmpty()) {
-                additionalClipUris.removeAt(additionalClipUris.lastIndex)
-                refreshClipQueueSummary()
-            }
-        }
-        add(timelinePanel, removeLastClipButton, top = 8)
         refreshClipQueueSummary()
         add(content, timelinePanel, bottom = 13)
 
@@ -517,24 +512,106 @@ class EditorActivity : Activity() {
     }
 
     private fun refreshClipQueueSummary() {
-        if (!::clipQueueSummary.isInitialized) return
+        if (!::clipQueueSummary.isInitialized || !::clipQueueControls.isInitialized) return
         val mainName = if (::sourceLabel.isInitialized && sourceLabel.text.isNotBlank()) {
             sourceLabel.text.toString()
         } else "Main clip"
-        val shownNames = additionalClipUris.take(4).map { queryDisplayName(it) }
-        val more = additionalClipUris.size - shownNames.size
-        clipQueueSummary.text = buildString {
-            append("01  ").append(mainName)
-            shownNames.forEachIndexed { index, name ->
-                append("\n").append(String.format(Locale.ROOT, "%02d", index + 2)).append("  ").append(name)
+        clipQueueSummary.text = "01  " + mainName + "\n" +
+            (additionalClipUris.size + 1) + " clip(s) in export sequence"
+        clipQueueControls.removeAllViews()
+
+        if (additionalClipUris.isEmpty()) {
+            clipQueueControls.addView(body("No added clips yet. Import videos to build your sequence.", 11f, muted))
+            return
+        }
+
+        additionalClipUris.forEachIndexed { index, uri ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(9f), dp(7f), dp(7f), dp(7f))
+                background = rounded(surface2, 12f, border)
             }
-            if (more > 0) append("\n… and ").append(more).append(" more")
-            append("\nTotal clips: ").append(1 + additionalClipUris.size)
+            val info = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            info.addView(body("CLIP " + String.format(Locale.ROOT, "%02d", index + 2), 9.5f, accent, true))
+            info.addView(body(queryDisplayName(uri), 12f, white, true))
+            info.addView(body("Queued after main clip", 10f, muted))
+            row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
+
+            fun addAction(glyph: String, hint: String, enabled: Boolean, action: () -> Unit) {
+                row.addView(
+                    queueAction(glyph, hint, enabled, action),
+                    LinearLayout.LayoutParams(dp(38f), dp(38f)).apply { marginStart = dp(4f) }
+                )
+            }
+            addAction("↑", "Move clip up", index > 0) { moveAdditionalClip(index, -1) }
+            addAction("↓", "Move clip down", index < additionalClipUris.lastIndex) { moveAdditionalClip(index, 1) }
+            addAction("+", "Duplicate clip", additionalClipUris.size < 20) { duplicateAdditionalClip(index) }
+            addAction("×", "Remove clip", true) { confirmRemoveAdditionalClip(index) }
+
+            clipQueueControls.addView(
+                row,
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6f) }
+            )
         }
-        if (::removeLastClipButton.isInitialized) {
-            removeLastClipButton.isEnabled = additionalClipUris.isNotEmpty()
-            removeLastClipButton.alpha = if (additionalClipUris.isNotEmpty()) 1f else 0.45f
+    }
+
+    private fun queueAction(glyph: String, hint: String, enabled: Boolean, action: () -> Unit): TextView =
+        body(glyph, 17f, if (enabled) white else muted, true).apply {
+            gravity = Gravity.CENTER
+            minWidth = dp(38f)
+            minHeight = dp(38f)
+            setPadding(dp(3f), dp(3f), dp(3f), dp(3f))
+            background = rounded(if (enabled) surface else bg, 10f, border)
+            contentDescription = hint
+            isClickable = enabled
+            isFocusable = enabled
+            alpha = if (enabled) 1f else 0.38f
+            setOnClickListener { if (enabled) action() }
         }
+
+    private fun moveAdditionalClip(index: Int, offset: Int) {
+        val target = index + offset
+        if (index !in additionalClipUris.indices || target !in additionalClipUris.indices) return
+        val reordered = com.sowz.aestudio.core.ClipQueueOperations.move(additionalClipUris, index, target)
+        additionalClipUris.clear()
+        additionalClipUris.addAll(reordered)
+        refreshClipQueueSummary()
+        status.text = "Clip moved. Export order updated."
+        status.setTextColor(green)
+    }
+
+    private fun duplicateAdditionalClip(index: Int) {
+        val uri = additionalClipUris.getOrNull(index) ?: return
+        if (additionalClipUris.size >= 20) {
+            toast("The project can contain up to 20 added clips.")
+            return
+        }
+        additionalClipUris.add(index + 1, uri)
+        refreshClipQueueSummary()
+        status.text = "Clip duplicated in the sequence."
+        status.setTextColor(green)
+    }
+
+    private fun confirmRemoveAdditionalClip(index: Int) {
+        val uri = additionalClipUris.getOrNull(index) ?: return
+        val name = queryDisplayName(uri)
+        AlertDialog.Builder(this)
+            .setTitle("Remove clip from sequence?")
+            .setMessage("Remove " + name + " from this project? The original media file will not be deleted.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Remove") { _, _ ->
+                val updated = com.sowz.aestudio.core.ClipQueueOperations.remove(additionalClipUris, index)
+                additionalClipUris.clear()
+                additionalClipUris.addAll(updated)
+                refreshClipQueueSummary()
+                status.text = "Clip removed from sequence. Source media is unchanged."
+                status.setTextColor(muted)
+            }
+            .show()
     }
 
     private fun startExportPicker() {
@@ -620,7 +697,7 @@ class EditorActivity : Activity() {
                     additionalClipUris.forEach { put(it.toString()) }
                 })
                 .put("frameRate", 30)
-                .put("createdWith", "SOWZ AE Studio 0.6.0")
+                .put("createdWith", "SOWZ AE Studio 0.7.0")
                 .toString(2)
             val output = contentResolver.openOutputStream(destination, "w")
                 ?: error("Could not open the project destination.")
@@ -657,7 +734,7 @@ class EditorActivity : Activity() {
                     val clipValue = savedClips.optString(index)
                     if (clipValue.isBlank() || clipValue == sourceString) continue
                     val clipUri = Uri.parse(clipValue)
-                    if (clipUri !in additionalClipUris) additionalClipUris.add(clipUri)
+                    additionalClipUris.add(clipUri)
                 }
             }
             refreshClipQueueSummary()

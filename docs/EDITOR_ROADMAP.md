@@ -4,11 +4,12 @@ Updated: 2026-10-25
 
 This roadmap uses public product feature lists, official AndroidX Media3 APIs, and public/licensed file-format research. It does not use leaked private data, credentials, hidden endpoints or access-control bypasses.
 
-## Delivered foundation — 0.6.0
+## Delivered foundation — 0.7.0 (0.6.0 foundation plus queue editing)
 
 - Local source video import and main-clip playback preview.
 - IN/OUT trim handles for the main clip.
 - Ordered final cut with up to 20 additional video clips and MP4 composition export.
+- Per-clip queue controls: move clips up/down, duplicate an entry, or remove an entry. Project serialization and MP4 export use the same list order.
 - Real brightness, contrast, quarter-turn rotation and static text/watermark overlay effects on preview and export.
 - Standard 3D `.cube` CC LUT import, parsing and application via Media3 `SingleColorLut`.
 - Save/reopen `.sowzproj` with source URI references, edit settings, text, LUT and clip queue.
@@ -16,14 +17,14 @@ This roadmap uses public product feature lists, official AndroidX Media3 APIs, a
 - After Effects project/preset inspector; `.ffx` effect-name and static-number decoding for recognized structures.
 - Limited `.ffx` translation: static `ADBE Brightness & Contrast` values are applied to the native brightness/contrast controls; animated or third-party effects remain unsupported.
 
-## Next milestone — independent clip controls
+## Next milestone — independent clip editing
 
-- Add per-clip trim ranges, source duration and metadata, reorder controls, duplicate and delete.
+- Add an IN/OUT range to each queued clip using its own probed source duration; persist per-clip trims and build clipped MediaItems for export.
 - Persist and restore document permissions; detect missing/revoked source URIs and offer relinking before export.
-- Add frame-accurate split and clip snapping; support audio-only assets only when final mix/export is tested.
+- Add frame-accurate split, duplicate-at-playhead and clip snapping.
 - Show export progress, cancel safely, check free storage and clean temporary files after failure.
 
-Acceptance: each queued clip can be edited and reordered, reopened from a saved project, and exported in the same order with measured timing.
+Acceptance: every queued clip has its own editable source range; save/reopen preserves those ranges and export timing matches the edited sequence.
 
 ## Multi-track timeline and composite preview
 
