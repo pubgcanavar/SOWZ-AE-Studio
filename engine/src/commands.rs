@@ -21,6 +21,13 @@ pub enum Command {
     },
     MoveLayer { layer_id: u64, new_start_frame: u64 },
     RenameLayer { layer_id: u64, name: String },
+    SetLayerProperties {
+        layer_id: u64,
+        name: String,
+        start_frame: u64,
+        duration_frames: u64,
+        transform: Transform,
+    },
     DuplicateLayer { layer_id: u64, new_start_frame: u64 },
     SplitLayer { layer_id: u64, at_frame: u64 },
     ReorderLayer { layer_id: u64, new_index: usize },
@@ -151,6 +158,13 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
         }
         Command::RenameLayer { layer_id, name } => {
             find_layer_mut(project, layer_id)?.name = name;
+        }
+        Command::SetLayerProperties { layer_id, name, start_frame, duration_frames, transform } => {
+            let layer = find_layer_mut(project, layer_id)?;
+            layer.name = name;
+            layer.start_frame = start_frame;
+            layer.duration_frames = duration_frames;
+            layer.transform = transform;
         }
         Command::DuplicateLayer { layer_id, new_start_frame } => {
             let (composition_index, track_index, _, original) = find_layer_location(project, layer_id)?;
