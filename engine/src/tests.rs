@@ -133,3 +133,112 @@ fn track_command_adds_a_real_track() {
     }).expect("track should be added");
     assert_eq!(engine.project().compositions[0].tracks.len(), 2);
 }
+
+
+#[test]
+fn split_layer_keeps_timing_and_shifts_right_side_keyframes() {
+    let mut engine = EditorEngine::new(project()).expect("valid test project");
+    engine.execute(Command::AddLayer {
+        composition_id: 2,
+        track_id: 3,
+        name: "Motion clip".to_owned(),
+        kind: LayerKind::Footage,
+        asset_id: None,
+        start_frame: 10,
+        duration_frames: 100,
+    }).expect("layer should be added");
+    let layer_id = engine.project().compositions[0].tracks[0].layers[0].id;
+    engine.execute(Command::PutKeyframe {
+        layer_id,
+        frame: 10,
+        property: "opacity".to_owned(),
+        value: PropertyValue::Number(0.2),
+        interpolation: Interpolation::Linear,
+    }).expect("first keyframe should be added");
+    engine.execute(Command::PutKeyframe {
+        layer_id,
+        frame: 50,
+        property: "opacity".to_owned(),
+        value: PropertyValue::Number(0.7),
+        interpolation: Interpolation::Bezier,
+    }).expect("split boundary keyframe should be added");
+    engine.execute(Command::PutKeyframe {
+        layer_id,
+        frame: 80,
+        property: "opacity".to_owned(),
+        value: PropertyValue::Number(1.0),
+        interpolation: Interpolation::EaseOut,
+    }).expect("last keyframe should be added");
+
+    engine.execute(Command::SplitLayer { layer_id, at_frame: 60 })
+        .expect("split should succeed");
+
+    let layers = &engine.project().compositions[0].tracks[0].layers;
+    assert_eq!(layers.len(), 2);
+    assert_eq!(layers[0].start_frame, 10);
+    assert_eq!(layers[0].duration_frames, 50);
+    assert_eq!(layers[1].start_frame, 60);
+    assert_eq!(layers[1].duration_frames, 50);
+    assert_eq!(layers[0].keyframes.iter().map(|item| item.frame).collect::<Vec<_>>(), vec![10, 50]);
+    assert_eq!(layers[1].keyframes.iter().map(|item| item.frame).collect::<Vec<_>>(), vec![0, 30]);
+    assert_ne!(layers[0].keyframes[1].id, layers[1].keyframes[0].id);
+}
+
+#[test]
+fn duplicate_layer_assigns_new_layer_and_keyframe_ids() {
+    let mut engine = EditorEngine::new(project()).expect("valid test project");
+    engine.execute(Command::AddLayer {
+        composition_id: 2,
+        track_id: 3,
+        name: "Title".to_owned(),
+        kind: LayerKind::Text,
+        asset_id: None,
+        start_frame: 0,
+        duration_frames: 90,
+    }).expect("layer should be added");
+    let layer_id = engine.project().compositions[0].tracks[0].layers[0].id;
+    engine.execute(Command::PutKeyframe {
+        layer_id,
+        frame: 20,
+        property: "position_x".to_owned(),
+        value: PropertyValue::Number(250.0),
+        interpolation: Interpolation::Bezier,
+    }).expect("keyframe should be added");
+    engine.execute(Command::DuplicateLayer { layer_id, new_start_frame: 100 })
+        .expect("duplicate should succeed");
+
+    let layers = &engine.project().compositions[0].tracks[0].layers;
+    assert_eq!(layers.len(), 2);
+    assert_eq!(layers[1].start_frame, 100);
+    assert_ne!(layers[0].id, layers[1].id);
+    assert_ne!(layers[0].keyframes[0].id, layers[1].keyframes[0].id);
+    assert_eq!(layers[0].keyframes[0].value, layers[1].keyframes[0].value);
+}
+
+#[test]
+fn reorder_layer_changes_track_order_and_is_undoable() {
+    let mut engine = EditorEngine::new(project()).expect("valid test project");
+    for name in ["One", "Two", "Three"] {
+        engine.execute(Command::AddLayer {
+            composition_id: 2,
+            track_id: 3,
+            name: name.to_owned(),
+            kind: LayerKind::Text,
+            asset_id: None,
+            start_frame: 0,
+            duration_frames: 90,
+        }).expect("layer should be added");
+    }
+    let original_ids = engine.project().compositions[0].tracks[0].layers
+        .iter().map(|layer| layer.id).collect::<Vec<_>>();
+    engine.execute(Command::ReorderLayer { layer_id: original_ids[2], new_index: 0 })
+        .expect("reorder should succeed");
+
+    let reordered = engine.project().compositions[0].tracks[0].layers
+        .iter().map(|layer| layer.id).collect::<Vec<_>>();
+    assert_eq!(reordered, vec![original_ids[2], original_ids[0], original_ids[1]]);
+    assert!(engine.undo());
+    let restored = engine.project().compositions[0].tracks[0].layers
+        .iter().map(|layer| layer.id).collect::<Vec<_>>();
+    assert_eq!(restored, original_ids);
+}
