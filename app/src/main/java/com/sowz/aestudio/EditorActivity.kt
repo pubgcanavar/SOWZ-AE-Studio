@@ -96,8 +96,9 @@ class EditorActivity : Activity() {
     private var backgroundAudioSettings = AudioTrackSettings()
     private var sourceAudioSettings = AudioTrackSettings(gain = 1f)
     private val additionalClipUris = mutableListOf<Uri>()
-    // Kept index-aligned with additionalClipUris; duplicated source URIs can have different trim ranges.
+    // Kept index-aligned with additionalClipUris; every queued entry owns trim and speed settings.
     private val additionalClipTrims = mutableListOf<ClipTrimRange>()
+    private val additionalClipSpeeds = mutableListOf<Float>()
     private val clipQueueHistory = EditHistory(ClipQueueSnapshot(emptyList(), emptyList()))
     private var pendingExportUri: Uri? = null
     private var temporaryOutput: File? = null
@@ -638,6 +639,7 @@ class EditorActivity : Activity() {
         restoreEndMs = null
         additionalClipUris.clear()
         additionalClipTrims.clear()
+        additionalClipSpeeds.clear()
         blurSigma = 0f
         mainClipSpeed = 1f
         resetQueueHistory()
@@ -693,6 +695,7 @@ class EditorActivity : Activity() {
             }
             additionalClipUris.add(uri)
             additionalClipTrims.add(ClipTrimRange())
+            additionalClipSpeeds.add(1f)
             added++
         }
         if (added > 0) recordQueueEdit()
@@ -807,10 +810,33 @@ class EditorActivity : Activity() {
         dialog.show()
     }
 
+    private fun editAdditionalClipSpeed(index: Int) {
+        if (index !in additionalClipUris.indices) return
+        val existing = additionalClipSpeeds.getOrElse(index) { 1f }
+        val values = floatArrayOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f, 4f)
+        val labels = values.map { formatSpeed(it) }.toTypedArray()
+        val selected = values.indexOfFirst { kotlin.math.abs(it - existing) < 0.001f }.coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("Speed · " + queryDisplayName(additionalClipUris[index]))
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                additionalClipSpeeds[index] = values[which]
+                recordQueueEdit()
+                refreshClipQueueSummary()
+                status.text = "Clip speed set to " + formatSpeed(values[which]) + "."
+                status.setTextColor(if (values[which] == 1f) muted else green)
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun currentQueueSnapshot(): ClipQueueSnapshot =
         ClipQueueSnapshot(
             uriStrings = additionalClipUris.map { it.toString() },
-            trims = additionalClipTrims.toList()
+            trims = additionalClipTrims.toList(),
+            speeds = additionalClipSpeeds.let {
+                if (it.size == additionalClipUris.size) it.toList() else List(additionalClipUris.size) { 1f }
+            }
         )
 
     private fun recordQueueEdit() {
@@ -828,6 +854,9 @@ class EditorActivity : Activity() {
         snapshot.uriStrings.forEach { additionalClipUris.add(Uri.parse(it)) }
         additionalClipTrims.clear()
         additionalClipTrims.addAll(snapshot.trims)
+        additionalClipSpeeds.clear()
+        additionalClipSpeeds.addAll(snapshot.speeds)
+        while (additionalClipSpeeds.size < additionalClipUris.size) additionalClipSpeeds.add(1f)
         refreshClipQueueSummary()
     }
 
@@ -892,6 +921,8 @@ class EditorActivity : Activity() {
             info.addView(body("CLIP " + String.format(Locale.ROOT, "%02d", index + 2), 9.5f, accent, true))
             info.addView(body(queryDisplayName(uri), 12f, white, true))
             info.addView(body(clipTrimLabel(additionalClipTrims.getOrElse(index) { ClipTrimRange() }), 10f, muted))
+            val clipSpeed = additionalClipSpeeds.getOrElse(index) { 1f }
+            info.addView(body(formatSpeed(clipSpeed) + " speed", 10f, if (clipSpeed == 1f) muted else accent, true))
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
 
             fun addAction(glyph: String, hint: String, enabled: Boolean, action: () -> Unit) {
@@ -901,6 +932,7 @@ class EditorActivity : Activity() {
                 )
             }
             addAction("✂", "Edit clip IN/OUT points", true) { editAdditionalClipTrim(index) }
+            addAction("▶", "Edit clip speed", true) { editAdditionalClipSpeed(index) }
             addAction("↑", "Move clip up", index > 0) { moveAdditionalClip(index, -1) }
             addAction("↓", "Move clip down", index < additionalClipUris.lastIndex) { moveAdditionalClip(index, 1) }
             addAction("+", "Duplicate clip", additionalClipUris.size < 20) { duplicateAdditionalClip(index) }
@@ -933,10 +965,13 @@ class EditorActivity : Activity() {
         if (index !in additionalClipUris.indices || target !in additionalClipUris.indices) return
         val reordered = com.sowz.aestudio.core.ClipQueueOperations.move(additionalClipUris, index, target)
         val reorderedTrims = com.sowz.aestudio.core.ClipQueueOperations.move(additionalClipTrims, index, target)
+        val reorderedSpeeds = com.sowz.aestudio.core.ClipQueueOperations.move(additionalClipSpeeds, index, target)
         additionalClipUris.clear()
         additionalClipUris.addAll(reordered)
         additionalClipTrims.clear()
         additionalClipTrims.addAll(reorderedTrims)
+        additionalClipSpeeds.clear()
+        additionalClipSpeeds.addAll(reorderedSpeeds)
         recordQueueEdit()
         refreshClipQueueSummary()
         status.text = "Clip moved. Export order updated."
@@ -951,6 +986,7 @@ class EditorActivity : Activity() {
         }
         additionalClipUris.add(index + 1, uri)
         additionalClipTrims.add(index + 1, additionalClipTrims.getOrElse(index) { ClipTrimRange() })
+        additionalClipSpeeds.add(index + 1, additionalClipSpeeds.getOrElse(index) { 1f })
         recordQueueEdit()
         refreshClipQueueSummary()
         status.text = "Clip duplicated in the sequence."
@@ -969,6 +1005,7 @@ class EditorActivity : Activity() {
                 additionalClipUris.clear()
                 additionalClipUris.addAll(updated)
                 if (index in additionalClipTrims.indices) additionalClipTrims.removeAt(index)
+                if (index in additionalClipSpeeds.indices) additionalClipSpeeds.removeAt(index)
                 recordQueueEdit()
                 refreshClipQueueSummary()
                 status.text = "Clip removed from sequence. Source media is unchanged."
@@ -1133,7 +1170,8 @@ class EditorActivity : Activity() {
                         put(org.json.JSONObject()
                             .put("uri", uri.toString())
                             .put("trimStartMs", trim.startMs)
-                            .put("trimEndMs", trim.endMs ?: -1L))
+                            .put("trimEndMs", trim.endMs ?: -1L)
+                            .put("speed", additionalClipSpeeds.getOrElse(index) { 1f }))
                     }
                 })
                 .put("mainClipSpeed", mainClipSpeed.toDouble())
@@ -1171,6 +1209,7 @@ class EditorActivity : Activity() {
             if (sourceString.isBlank()) error("The project has no source media reference.")
             additionalClipUris.clear()
             additionalClipTrims.clear()
+            additionalClipSpeeds.clear()
             val savedClips = document.optJSONArray("additionalClipUris")
             if (savedClips != null) {
                 for (index in 0 until min(savedClips.length(), 20)) {
@@ -1187,7 +1226,9 @@ class EditorActivity : Activity() {
                     } catch (_: IllegalArgumentException) {
                         ClipTrimRange()
                     }
+                    val savedSpeed = clipObject?.optDouble("speed", 1.0)?.toFloat() ?: 1f
                     additionalClipTrims.add(range)
+                    additionalClipSpeeds.add(if (savedSpeed.isFinite()) savedSpeed.coerceIn(0.25f, 4f) else 1f)
                 }
             }
             resetQueueHistory()
@@ -1737,6 +1778,7 @@ class EditorActivity : Activity() {
                 .build()
             sequenceItems.add(
                 EditedMediaItem.Builder(clipItem)
+                    .setSpeed(buildSpeedProvider(additionalClipSpeeds.getOrElse(index) { 1f }))
                     .setEffects(Effects(buildAudioProcessors(sourceAudioSettings.gain), buildVideoEffects()))
                     .build()
             )
