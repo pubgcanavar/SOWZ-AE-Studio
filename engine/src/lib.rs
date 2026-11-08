@@ -14,7 +14,7 @@ mod package;
 pub use commands::{Command, EditorEngine};
 pub use model::{
     Asset, AssetKind, AssetSource, Composition, Effect, Interpolation, Keyframe,
-    Layer, LayerKind, ParameterValue, Project, ProjectError, PropertyValue,
+    Layer, LayerClipboard, LayerKind, ParameterValue, Project, ProjectError, PropertyValue,
     Track, TrackKind, Transform,
 };
 pub use package::{LoadedPackage, PackageError, load_package, save_package};
