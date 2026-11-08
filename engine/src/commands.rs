@@ -10,6 +10,7 @@ const MAX_HISTORY: usize = 100;
 #[derive(Clone, Debug)]
 pub enum Command {
     AddTrack { composition_id: u64, name: String, kind: TrackKind },
+    SetTrackFlags { track_id: u64, muted: bool, locked: bool, visible: bool },
     AddAsset { name: String, kind: AssetKind, source: AssetSource },
     AddLayer {
         composition_id: u64,
@@ -143,6 +144,12 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
             let id = project.allocate_id()?;
             project.assets.push(Asset { id, name, kind, source });
         }
+        Command::SetTrackFlags { track_id, muted, locked, visible } => {
+            let track = find_track_mut(project, track_id)?;
+            track.muted = muted;
+            track.locked = locked;
+            track.visible = visible;
+        }
         Command::AddLayer {
             composition_id, track_id, name, kind, asset_id, start_frame, duration_frames,
         } => {
@@ -153,6 +160,9 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
             let track = composition.tracks.iter_mut()
                 .find(|item| item.id == track_id)
                 .ok_or(ProjectError::NotFound)?;
+            if track.locked {
+                return Err(ProjectError::TrackLocked);
+            }
             track.layers.push(Layer {
                 id, name, kind, start_frame, duration_frames, asset_id,
                 enabled: true, transform: Transform::default(), effects: Vec::new(), keyframes: Vec::new(),
@@ -173,6 +183,9 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
         }
         Command::DuplicateLayer { layer_id, new_start_frame } => {
             let (composition_index, track_index, _, original) = find_layer_location(project, layer_id)?;
+            if project.compositions[composition_index].tracks[track_index].locked {
+                return Err(ProjectError::TrackLocked);
+            }
             let mut duplicate = original;
             duplicate.id = project.allocate_id()?;
             duplicate.start_frame = new_start_frame;
@@ -187,6 +200,9 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
         Command::SplitLayer { layer_id, at_frame } => {
             let (composition_index, track_index, layer_index, original) =
                 find_layer_location(project, layer_id)?;
+            if project.compositions[composition_index].tracks[track_index].locked {
+                return Err(ProjectError::TrackLocked);
+            }
             let split_offset = at_frame.checked_sub(original.start_frame)
                 .ok_or_else(|| ProjectError::Invalid("split point is before the layer".to_owned()))?;
             if split_offset == 0 || split_offset >= original.duration_frames {
@@ -216,6 +232,9 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
         }
         Command::ReorderLayer { layer_id, new_index } => {
             let (composition_index, track_index, layer_index, _) = find_layer_location(project, layer_id)?;
+            if project.compositions[composition_index].tracks[track_index].locked {
+                return Err(ProjectError::TrackLocked);
+            }
             let layers = &mut project.compositions[composition_index].tracks[track_index].layers;
             let layer = layers.remove(layer_index);
             let destination = new_index.min(layers.len());
@@ -240,6 +259,9 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
             let track = composition.tracks.iter_mut()
                 .find(|item| item.id == track_id)
                 .ok_or(ProjectError::NotFound)?;
+            if track.locked {
+                return Err(ProjectError::TrackLocked);
+            }
             track.layers.push(layer);
         }
         Command::TrimLayer { layer_id, new_duration_frames } => {
@@ -278,6 +300,9 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
             for composition in &mut project.compositions {
                 for track in &mut composition.tracks {
                     if let Some(index) = track.layers.iter().position(|item| item.id == layer_id) {
+                        if track.locked {
+                            return Err(ProjectError::TrackLocked);
+                        }
                         track.layers.remove(index);
                         return Ok(());
                     }
@@ -287,6 +312,15 @@ fn apply_command(project: &mut Project, command: Command) -> Result<(), ProjectE
         }
     }
     Ok(())
+}
+
+fn find_track_mut(project: &mut Project, track_id: u64) -> Result<&mut Track, ProjectError> {
+    for composition in &mut project.compositions {
+        if let Some(track) = composition.tracks.iter_mut().find(|track| track.id == track_id) {
+            return Ok(track);
+        }
+    }
+    Err(ProjectError::NotFound)
 }
 
 fn find_layer<'a>(project: &'a Project, layer_id: u64) -> Result<&'a Layer, ProjectError> {
@@ -319,6 +353,9 @@ fn find_layer_mut(project: &mut Project, layer_id: u64) -> Result<&mut Layer, Pr
     for composition in &mut project.compositions {
         for track in &mut composition.tracks {
             if let Some(layer) = track.layers.iter_mut().find(|item| item.id == layer_id) {
+                if track.locked {
+                    return Err(ProjectError::TrackLocked);
+                }
                 return Ok(layer);
             }
         }
@@ -331,6 +368,9 @@ fn find_effect_mut(project: &mut Project, effect_id: u64) -> Result<&mut Effect,
         for track in &mut composition.tracks {
             for layer in &mut track.layers {
                 if let Some(effect) = layer.effects.iter_mut().find(|item| item.id == effect_id) {
+                    if track.locked {
+                        return Err(ProjectError::TrackLocked);
+                    }
                     return Ok(effect);
                 }
             }
