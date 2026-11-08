@@ -1929,6 +1929,25 @@ class EditorActivity : Activity() {
         }.start()
     }
 
+    private fun cancelExport() {
+        val active = transformer
+        if (active == null) {
+            toast("There is no active export to cancel.")
+            return
+        }
+        active.cancel()
+        stopExportProgressPolling()
+        temporaryOutput?.delete()
+        temporaryOutput = null
+        transformer = null
+        resetExportProgressUi()
+        status.text = "Export cancelled."
+        status.setTextColor(muted)
+        exportButton.isEnabled = true
+        exportButton.alpha = 1f
+        toast("Export cancelled.")
+    }
+
     private fun queryDisplayName(uri: Uri): String {
         val cursor = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
         cursor?.use {
