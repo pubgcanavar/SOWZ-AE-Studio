@@ -8,7 +8,7 @@ use std::{
 
 use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use sowz_ae_core::{
-    Command, EditorEngine, Layer, LayerClipboard, LayerKind, LoadedPackage,
+    AssetKind, AssetSource, Command, EditorEngine, Layer, LayerClipboard, LayerKind, LoadedPackage,
     Project, TrackKind, Transform, load_package, save_package,
 };
 
@@ -21,6 +21,7 @@ struct SowzAeApp {
     engine: EditorEngine,
     selected_track_id: u64,
     selected_layer_id: Option<u64>,
+    selected_asset_id: Option<u64>,
     playhead_frame: u64,
     clipboard: Option<LayerClipboard>,
     package_files: BTreeMap<String, Vec<u8>>,
@@ -48,6 +49,7 @@ impl SowzAeApp {
             engine,
             selected_track_id: 3,
             selected_layer_id: None,
+            selected_asset_id: None,
             playhead_frame: 0,
             clipboard: None,
             package_files: BTreeMap::new(),
@@ -106,6 +108,7 @@ impl SowzAeApp {
                 self.engine = engine;
                 self.selected_track_id = 3;
                 self.selected_layer_id = None;
+                self.selected_asset_id = None;
                 self.playhead_frame = 0;
                 self.clipboard = None;
                 self.package_files.clear();
@@ -133,6 +136,7 @@ impl SowzAeApp {
                         .map(|track| track.id)
                         .unwrap_or(0);
                     self.selected_layer_id = None;
+                    self.selected_asset_id = None;
                     self.playhead_frame = 0;
                     self.status = format!("Opened {}", path.file_name().and_then(|name| name.to_str()).unwrap_or("project"));
                     self.sync_inspector();
@@ -262,6 +266,101 @@ impl SowzAeApp {
                     .and_then(|track| track.layers.last())
                     .map(|layer| layer.id);
                 self.status = "Layer added".to_owned();
+                self.sync_inspector();
+            }
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn import_media(&mut self) {
+        let paths = rfd::FileDialog::new()
+            .add_filter("Media and graphics", &[
+                "mp4", "mov", "m4v", "mkv", "webm", "avi", "mxf",
+                "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "exr", "gif",
+                "psd", "psb", "svg", "json", "lottie",
+                "wav", "mp3", "m4a", "aac", "aiff", "flac", "opus",
+            ])
+            .pick_files();
+        let Some(paths) = paths else { return; };
+        let mut imported = 0usize;
+        for path in paths {
+            let extension = path.extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let kind = match extension.as_str() {
+                "mp4" | "mov" | "m4v" | "mkv" | "webm" | "avi" | "mxf" => AssetKind::Video,
+                "wav" | "mp3" | "m4a" | "aac" | "aiff" | "flac" | "opus" => AssetKind::Audio,
+                "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tif" | "tiff" | "exr" | "gif" | "psd" | "psb" => AssetKind::Image,
+                "svg" | "json" | "lottie" => AssetKind::Vector,
+                _ => AssetKind::Other,
+            };
+            let name = path.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("Imported Media")
+                .to_owned();
+            let source = AssetSource::Linked { uri: path.to_string_lossy().into_owned() };
+            match self.engine.execute(Command::AddAsset { name, kind, source }) {
+                Ok(()) => {
+                    self.selected_asset_id = Some(self.engine.project().assets.last().map(|asset| asset.id).unwrap_or(0));
+                    imported += 1;
+                }
+                Err(error) => self.status = error.to_string(),
+            }
+        }
+        if imported > 0 {
+            self.status = format!("Imported {imported} linked asset(s). Original files stay at their current paths.");
+        }
+    }
+
+    fn add_asset_to_timeline(&mut self) {
+        let Some(asset_id) = self.selected_asset_id else {
+            self.status = "Select a media asset first".to_owned();
+            return;
+        };
+        let Some(asset) = self.engine.project().assets.iter().find(|asset| asset.id == asset_id).cloned() else {
+            self.status = "Selected media asset was not found".to_owned();
+            return;
+        };
+        let (track_kind, layer_kind) = match asset.kind {
+            AssetKind::Video => (TrackKind::Video, LayerKind::Footage),
+            AssetKind::Audio => (TrackKind::Audio, LayerKind::Audio),
+            AssetKind::Image | AssetKind::Vector => (TrackKind::Video, LayerKind::Footage),
+            AssetKind::Font | AssetKind::Other => {
+                self.status = "This asset type cannot be placed on the timeline yet".to_owned();
+                return;
+            }
+        };
+        let Some(composition) = self.composition() else {
+            self.status = "No composition is available".to_owned();
+            return;
+        };
+        let composition_id = composition.id;
+        let composition_duration = composition.duration_frames;
+        let existing_track = composition.tracks.iter()
+            .find(|track| track.kind == track_kind)
+            .map(|track| track.id);
+        if let Some(track_id) = existing_track {
+            self.selected_track_id = track_id;
+        } else {
+            self.add_track(track_kind);
+        }
+
+        let start = self.playhead_frame.min(composition_duration.saturating_sub(1));
+        let duration = composition_duration.saturating_sub(start).max(1);
+        let layer_id = self.engine.project().next_id;
+        match self.engine.execute(Command::AddLayer {
+            composition_id,
+            track_id: self.selected_track_id,
+            name: asset.name,
+            kind: layer_kind,
+            asset_id: Some(asset_id),
+            start_frame: start,
+            duration_frames: duration,
+        }) {
+            Ok(()) => {
+                self.selected_layer_id = Some(layer_id);
+                self.status = "Media reference added to timeline. Preview decoding is not connected yet.".to_owned();
                 self.sync_inspector();
             }
             Err(error) => self.status = error.to_string(),
@@ -466,6 +565,19 @@ impl eframe::App for SowzAeApp {
                                     self.sync_inspector();
                                 }
                             });
+                        }
+                    }
+                    ui.separator();
+                    ui.heading("Media");
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Import Media").clicked() { self.import_media(); }
+                        if ui.button("Add to Timeline").clicked() { self.add_asset_to_timeline(); }
+                    });
+                    let assets = self.engine.project().assets.clone();
+                    for asset in assets {
+                        let label = format!("{}  ·  {:?}", asset.name, asset.kind);
+                        if ui.selectable_label(self.selected_asset_id == Some(asset.id), label).clicked() {
+                            self.selected_asset_id = Some(asset.id);
                         }
                     }
                 });
