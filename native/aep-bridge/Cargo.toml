@@ -1,0 +1,13 @@
+[package]
+name = "sowz-aep-bridge"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+aep-reader = { path = "../../third_party/aep-reader", features = ["serde"] }
+jni = "0.21.1"
+serde_json = "1"
