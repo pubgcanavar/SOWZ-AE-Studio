@@ -620,11 +620,22 @@ class EditorActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        layerActions.addView(button("＋ Video layer", secondary = true) { pickVideoLayer() },
-            LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(5f) })
+        layerActions.addView(button("＋ Video", secondary = true) { pickVideoLayer() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(4f) })
         layerActions.addView(button("＋ Audio", secondary = true) { pickBackgroundAudio() },
-            LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(5f) })
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginHorizontal = dp(3f) })
+        layerActions.addView(button("＋ Text", secondary = true) { promptForTextLayer() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(4f) })
         add(timelinePanel, layerActions, top = 8)
+        val layerEditActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        layerEditActions.addView(button("Edit selected text", secondary = true) { editSelectedTextLayer() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(4f) })
+        layerEditActions.addView(button("Remove selected layer", secondary = true) { removeSelectedTimelineLayer() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(4f) })
+        add(timelinePanel, layerEditActions, top = 6)
 
         clipQueueControls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(timelinePanel, clipQueueControls, top = 8)
