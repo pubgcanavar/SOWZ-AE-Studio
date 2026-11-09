@@ -24,7 +24,8 @@ internal class SowzLayerTransformEffect(
     private val timeOffsetMs: Long = 0L
 ) : GlEffect {
     override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean =
-        layer.opacity.keyframes.isEmpty() &&
+        layer.enabled &&
+            layer.opacity.keyframes.isEmpty() &&
             layer.positionX.keyframes.isEmpty() &&
             layer.positionY.keyframes.isEmpty() &&
             layer.scaleX.keyframes.isEmpty() &&
@@ -67,7 +68,11 @@ internal class SowzLayerTransformEffect(
             val compositionTimeMs = presentationTimeUs.coerceAtLeast(0L) / 1_000L + timeOffsetMs
             val localTimeMs = (compositionTimeMs - layer.timelineStartMs)
                 .coerceIn(0L, layer.durationMs)
-            val opacity = layer.opacity.valueAt(localTimeMs).coerceIn(0f, 1f)
+            val opacity = if (layer.enabled) {
+                layer.opacity.valueAt(localTimeMs).coerceIn(0f, 1f)
+            } else {
+                0f
+            }
             val positionX = layer.positionX.valueAt(localTimeMs).coerceIn(-1f, 1f)
             val positionY = layer.positionY.valueAt(localTimeMs).coerceIn(-1f, 1f)
             val scaleX = layer.scaleX.valueAt(localTimeMs).coerceIn(0.05f, 8f)
