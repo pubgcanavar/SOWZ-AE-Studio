@@ -9,8 +9,8 @@ android {
         applicationId = "com.sowz.aestudio"
         minSdk = 24
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.4.0"
+        versionCode = 15
+        versionName = "1.5.0"
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
     buildTypes {
@@ -31,7 +31,6 @@ android {
     testOptions { unitTests.isReturnDefaultValues = true }
 }
 dependencies {
-    implementation("androidx.webkit:webkit:1.18.0")
     implementation("androidx.media3:media3-exoplayer:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
     implementation("androidx.media3:media3-transformer:1.11.1")
