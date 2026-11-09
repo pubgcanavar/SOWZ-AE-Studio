@@ -3,15 +3,13 @@ name: Build SOWZ AE Studio with EffectCraft
 on:
   push:
     branches: [ "feature/android-effectcraft-wasm" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-effectcraft-${{ github.event.pull_request.head.ref || github.ref }}
+  group: android-effectcraft-${{ github.ref_name }}
   cancel-in-progress: true
 
 jobs:
