@@ -105,18 +105,18 @@ object TimelineProjectStore {
             sourceOutMs = json.optLong("sourceOutMs", 1L),
             zIndex = json.optInt("zIndex", 0),
             enabled = json.optBoolean("enabled", true),
-            opacity = animatedFromJson(json.optJSONObject("opacity")),
-            positionX = animatedFromJson(json.optJSONObject("positionX")),
-            positionY = animatedFromJson(json.optJSONObject("positionY")),
-            scaleX = animatedFromJson(json.optJSONObject("scaleX")),
-            scaleY = animatedFromJson(json.optJSONObject("scaleY")),
-            rotationDegrees = animatedFromJson(json.optJSONObject("rotationDegrees"))
+            opacity = animatedFromJson(json.optJSONObject("opacity"), 1f),
+            positionX = animatedFromJson(json.optJSONObject("positionX"), 0f),
+            positionY = animatedFromJson(json.optJSONObject("positionY"), 0f),
+            scaleX = animatedFromJson(json.optJSONObject("scaleX"), 1f),
+            scaleY = animatedFromJson(json.optJSONObject("scaleY"), 1f),
+            rotationDegrees = animatedFromJson(json.optJSONObject("rotationDegrees"), 0f)
         )
     }
 
-    private fun animatedFromJson(json: JSONObject?): AnimatedFloat {
-        if (json == null) return AnimatedFloat(1f)
-        val initial = json.optDouble("initialValue", 1.0).toFloat()
+    private fun animatedFromJson(json: JSONObject?, defaultValue: Float): AnimatedFloat {
+        if (json == null) return AnimatedFloat(defaultValue)
+        val initial = json.optDouble("initialValue", defaultValue.toDouble()).toFloat()
         require(initial.isFinite()) { "Animated property has a non-finite initial value." }
         val framesJson = json.optJSONArray("keyframes") ?: JSONArray()
         require(framesJson.length() <= MAX_KEYFRAMES_PER_PROPERTY) {
