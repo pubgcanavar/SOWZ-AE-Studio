@@ -61,7 +61,8 @@ class TimelineModelTest {
         )
         val lower = EditLayer(
             id = "lower", name = "lower", kind = LayerKind.TEXT, sourceUri = null,
-            timelineStartMs = 0L, sourceInMs = 0L, sourceOutMs = 1_000L, zIndex = 1
+            timelineStartMs = 0L, sourceInMs = 0L, sourceOutMs = 1_000L, zIndex = 1,
+            contentText = "lower layer"
         )
         val project = TimelineProject("p1", "Test", durationMs = 1_000L, layers = listOf(upper, lower))
         assertEquals(listOf("lower", "upper"), project.visibleLayersAt(150L).map { it.id })
