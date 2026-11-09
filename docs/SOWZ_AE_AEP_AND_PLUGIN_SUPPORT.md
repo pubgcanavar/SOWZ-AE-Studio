@@ -44,3 +44,14 @@ The current EffectCraft-based desktop editor saves its native project in EffectC
 ## Important operating advice
 
 Keep the original AEP and its footage/plugin dependencies backed up. If After Effects plug-ins are essential to the look, render a reference movie or image sequence in a licensed After Effects installation and compare it with the imported result. The AEP import report is the authority for what this build did and did not convert.
+
+## Research snapshot used for this integration
+
+The following public feature references were checked on 9 November 2026 and are implementation benchmarks, not claims that SOWZ AE already has full parity:
+
+- EffectCraft's pinned catalogue documents 308 built-in effects and 2,988 effect parameters: https://github.com/storytold/effectcraft/blob/a41ff5015c6687db15a6f074a47b870b8f09fece/docs/effects.md
+- EffectCraft's own gap assessment estimates overall readiness for professional work at approximately 45%; the same document lists significant project-format, preset and rendering-fidelity gaps: https://github.com/storytold/effectcraft/blob/a41ff5015c6687db15a6f074a47b870b8f09fece/docs/gaps.md
+- At the pinned commit, EffectCraft documents 76 original animation presets and no native `.ffx` import. It does not claim to load Adobe `.aex` binaries.
+- Nova Editor's public release notes are used as a feature benchmark for path/pen editing, blend modes, motion effects, glow/rays/streaks and 3D timeline behaviour: https://www.novavisionhub.com/novaeditor
+
+The effect count is catalogue breadth, not a measurement of pixel-identical After Effects output. EffectCraft's own parity notes distinguish whether an effect exists, whether it runs on GPU, 32-bit behaviour and whether its rendered output has been compared to After Effects. SOWZ AE must retain that distinction in future compatibility reports.
