@@ -100,9 +100,11 @@ object AepxProjectInspector {
                     binaryBlocks++
             }
 
-            if ((normalized.contains("effect") || normalized.contains("plugin")) &&
-                effects.size < MAX_EFFECT_LABELS
-            ) {
+            val isEffectNode = normalized == "effect" ||
+                normalized.startsWith("effect") ||
+                normalized.startsWith("adbeeffect") ||
+                normalized.contains("plugin")
+            if (isEffectNode && effects.size < MAX_EFFECT_LABELS) {
                 val label = sequenceOf(
                     AepxProjectInspector.attributeValue(attributes, "matchName"),
                     AepxProjectInspector.attributeValue(attributes, "name"),
