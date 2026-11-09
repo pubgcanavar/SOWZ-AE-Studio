@@ -135,6 +135,7 @@ class EditorActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var trimSummary: TextView
     private lateinit var clipQueueSummary: TextView
+    private lateinit var timelineOverview: EffectCraftTimelineView
     private lateinit var clipQueueControls: LinearLayout
     private lateinit var undoQueueButton: TextView
     private lateinit var redoQueueButton: TextView
@@ -193,20 +194,24 @@ class EditorActivity : Activity() {
                     scrubber.progress = ((activePlayer.currentPosition.coerceAtLeast(0L).toDouble() /
                         durationMs.toDouble()) * SCALE_MAX).toInt().coerceIn(0, SCALE_MAX)
                 }
+                if (::timelineOverview.isInitialized) {
+                    timelineOverview.playheadMs = activePlayer.currentPosition.coerceAtLeast(0L)
+                }
                 playbackTime.text = "${formatTime(activePlayer.currentPosition)} / ${formatTime(durationMs)}"
             }
             handler.postDelayed(this, 200L)
         }
     }
 
-    private val bg = Color.rgb(12, 13, 16)
-    private val surface = Color.rgb(21, 23, 29)
-    private val surface2 = Color.rgb(29, 32, 39)
-    private val border = Color.rgb(48, 52, 62)
-    private val accent = Color.rgb(255, 138, 50)
-    private val white = Color.rgb(244, 245, 247)
-    private val muted = Color.rgb(153, 160, 173)
-    private val green = Color.rgb(99, 216, 159)
+    // EffectCraft dark-theme tokens: app #121212, header #1f1f1f, panel #232323, blue #2d8ceb.
+    private val bg = Color.rgb(0x12, 0x12, 0x12)
+    private val surface = Color.rgb(0x1f, 0x1f, 0x1f)
+    private val surface2 = Color.rgb(0x23, 0x23, 0x23)
+    private val border = Color.rgb(0x34, 0x34, 0x34)
+    private val accent = Color.rgb(0x2d, 0x8c, 0xeb)
+    private val white = Color.rgb(0xc8, 0xc8, 0xc8)
+    private val muted = Color.rgb(0x9a, 0x9a, 0x9a)
+    private val green = Color.rgb(0x65, 0xb9, 0x8e)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -249,8 +254,8 @@ class EditorActivity : Activity() {
 
     private fun panel(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(16f), dp(15f), dp(16f), dp(15f))
-        background = rounded(surface, 20f, border)
+        setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
+        background = rounded(surface, 8f, border)
     }
 
     private fun label(value: String): TextView = TextView(this).apply {
@@ -332,14 +337,23 @@ class EditorActivity : Activity() {
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
         }, LinearLayout.LayoutParams(0, -2, 1f))
         add(header, toolbar)
-        add(header, body("Video editor", 24f, white, true), top = 9)
-        add(header, body("Import  ·  trim  ·  preview  ·  export", 12f, muted), top = 3)
+        add(header, body("Composition", 23f, white, true), top = 8)
+        add(header, body("Viewer  ·  timeline  ·  layer controls  ·  effects", 11.5f, muted), top = 2)
+        val exportAction = body("EXPORT", 10f, accent, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(10f), dp(7f), dp(10f), dp(7f))
+            background = rounded(surface2, 7f, border)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { startExportPicker() }
+        }
+        toolbar.addView(exportAction)
         root.addView(header, LinearLayout.LayoutParams(-1, -2))
 
         val scroll = ScrollView(this).apply {
             clipToPadding = false
             isFillViewport = false
-            setPadding(dp(16f), dp(3f), dp(16f), dp(22f))
+            setPadding(dp(10f), dp(3f), dp(10f), dp(22f))
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         }
         val sectionNav = HorizontalScrollView(this).apply {
@@ -351,21 +365,34 @@ class EditorActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val sectionChips = linkedMapOf<String, TextView>()
+        var activeSection = "VIEWER"
+        fun refreshSectionChips() {
+            sectionChips.forEach { (name, chip) ->
+                val selected = name == activeSection
+                chip.background = rounded(if (selected) accent else surface2, 7f, if (selected) null else border)
+                chip.setTextColor(if (selected) Color.rgb(12, 18, 25) else muted)
+            }
+        }
         listOf("MEDIA", "VIEWER", "TIMELINE", "AUDIO", "EFFECTS", "FFX", "EXPORT").forEach { name ->
-            val chip = body(name, 10f, muted, true).apply {
+            val chip = body(name, 9.5f, muted, true).apply {
                 gravity = Gravity.CENTER
-                setPadding(dp(12f), dp(9f), dp(12f), dp(9f))
-                background = rounded(surface2, 12f, border)
+                setPadding(dp(11f), dp(8f), dp(11f), dp(8f))
+                background = rounded(surface2, 7f, border)
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
+                    activeSection = name
+                    refreshSectionChips()
                     sectionTargets[name]?.let { target -> scroll.smoothScrollTo(0, target.top) }
                 }
             }
+            sectionChips[name] = chip
             navRow.addView(chip, LinearLayout.LayoutParams(-2, -2).apply {
-                if (navRow.childCount > 0) marginStart = dp(7f)
+                if (navRow.childCount > 0) marginStart = dp(6f)
             })
         }
+        refreshSectionChips()
         sectionNav.addView(navRow)
         root.addView(sectionNav, LinearLayout.LayoutParams(-1, -2))
 
@@ -384,7 +411,7 @@ class EditorActivity : Activity() {
 
         val previewPanel = panel()
         sectionTargets["VIEWER"] = previewPanel
-        add(previewPanel, label("Preview"))
+        add(previewPanel, label("Composition viewer"))
         add(previewPanel, space(9))
         playerView = PlayerView(this).apply {
             useController = true
@@ -416,6 +443,7 @@ class EditorActivity : Activity() {
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {
                     if (durationMs > 0) player?.seekTo(durationMs * scrubber.progress / SCALE_MAX)
                     draggingScrubber = false
+                    refreshTimelineOverview()
                 }
             })
         }
@@ -469,6 +497,22 @@ class EditorActivity : Activity() {
         add(timelinePanel, body("Manage every queued clip: move it, duplicate it, or remove it. Export follows this order. The trim handles still apply to the main clip; added clips use their full duration.", 12f, muted), top = 5)
         clipQueueSummary = body("Main clip: none", 13f, white, true)
         add(timelinePanel, clipQueueSummary, top = 9)
+        timelineOverview = EffectCraftTimelineView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(-1, dp(132f)).apply {
+                topMargin = dp(10f)
+                bottomMargin = dp(8f)
+            }
+            onSeekPosition = { positionMs ->
+                if (durationMs > 0L) {
+                    val safePosition = positionMs.coerceIn(0L, durationMs)
+                    scrubber.progress = ((safePosition.toDouble() / durationMs) * SCALE_MAX)
+                        .toInt().coerceIn(0, SCALE_MAX)
+                    player?.seekTo(safePosition)
+                    timelineOverview.playheadMs = safePosition
+                }
+            }
+        }
+        timelinePanel.addView(timelineOverview)
         clipQueueControls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(timelinePanel, clipQueueControls, top = 8)
         val historyRow = LinearLayout(this).apply {
@@ -1486,6 +1530,7 @@ class EditorActivity : Activity() {
             clipStartMs = 0L
             clipEndMs = 0L
             trimSummary.text = "Import a video to set the trim range."
+            refreshTimelineOverview()
             return
         }
         clipStartMs = (durationMs * inPoint.progress / SCALE_MAX).coerceIn(0L, durationMs)
@@ -1495,6 +1540,16 @@ class EditorActivity : Activity() {
         } else {
             trimSummary.text = "IN ${formatTime(clipStartMs)}   ·   OUT ${formatTime(clipEndMs)}   ·   ${String.format(Locale.ROOT, "%.2f", (clipEndMs - clipStartMs) / 1000.0)} s"
         }
+        refreshTimelineOverview()
+    }
+
+    private fun refreshTimelineOverview() {
+        if (!::timelineOverview.isInitialized) return
+        timelineOverview.durationMs = durationMs
+        timelineOverview.inMs = clipStartMs
+        timelineOverview.outMs = clipEndMs
+        timelineOverview.playheadMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        timelineOverview.hasAudioTrack = backgroundAudioUri != null
     }
 
     private fun updateColorValues() {
