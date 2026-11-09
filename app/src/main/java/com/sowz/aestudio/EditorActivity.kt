@@ -1542,8 +1542,11 @@ class EditorActivity : Activity() {
                     )
                     layer.kind == LayerKind.VIDEO && layer.sourceUri != null -> {
                         val start = layer.timelineStartMs.coerceIn(0L, sourceDurationMs - 1L)
-                        val sourceEnd = layer.sourceOutMs.coerceAtMost(sourceDurationMs - start)
-                        if (sourceEnd <= layer.sourceInMs) null
+                        val safeDuration = layer.durationMs.coerceAtMost(
+                            (sourceDurationMs - start).coerceAtLeast(1L)
+                        )
+                        val sourceEnd = layer.sourceInMs + safeDuration
+                        if (safeDuration <= 0L || sourceEnd <= layer.sourceInMs) null
                         else layer.copy(
                             timelineStartMs = start,
                             sourceOutMs = sourceEnd,
@@ -2215,6 +2218,9 @@ class EditorActivity : Activity() {
             // Some document providers issue temporary read grants only; the current session can still use them.
         }
 
+        playerView.player = null
+        compositionPlayer?.release()
+        compositionPlayer = null
         player?.release()
         player = null
         sourceUri = uri
