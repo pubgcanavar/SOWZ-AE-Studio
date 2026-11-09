@@ -209,7 +209,7 @@ class MainActivity : Activity() {
     }
 
     private fun buildHome(parent: LinearLayout) {
-        addBlock(parent, label("Motion graphics · mobile inspector"), bottom = 12)
+        addBlock(parent, label("Motion graphics · mobile editor"), bottom = 12)
         val hero = card().apply {
             background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(Color.rgb(36, 27, 24), Color.rgb(22, 23, 29), surface)).apply {
                 cornerRadius = d(24f).toFloat()
@@ -217,7 +217,7 @@ class MainActivity : Activity() {
             }
             addView(text("YOUR AE PROJECTS.\nON THE GO.", 28f, white, true))
             addView(spacer(10))
-            addView(text("Open and inspect After Effects project files right on your phone.", 14f, muted))
+            addView(text("Open After Effects projects and edit the layers and effects that the import engine can translate.", 14f, muted))
             addView(spacer(17))
             addView(row().apply {
                 addView(text("AEP", 11f, accent, true).apply {
@@ -259,7 +259,7 @@ class MainActivity : Activity() {
         info.addView(spacer(8))
         info.addView(text("Inspect first. Render honestly.", 19f, white, true))
         info.addView(spacer(6))
-        info.addView(text("SOWZ AE Studio reads project structure and reports what it can recognize. Full Adobe effects, expressions and plugin rendering are not yet implemented.", 13f, muted))
+        info.addView(text("EffectCraft imports compatible AEP/AEPX layers, keyframes and supported effects. Unsupported effects and third-party plugins are shown in the import report instead of being silently replaced.", 13f, muted))
         info.addView(spacer(12))
         info.addView(actionButton("View compatibility notes  →", secondary = true) { tab = Tab.SETTINGS; render() })
         addBlock(parent, info, bottom = 16)
