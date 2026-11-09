@@ -68,6 +68,7 @@ import com.sowz.aestudio.core.EditHistory
 import com.sowz.aestudio.core.AudioTrackSettings
 import com.sowz.aestudio.core.AepNativeReader
 import com.sowz.aestudio.core.AepProjectImporter
+import com.sowz.aestudio.core.AepProjectSummary
 import com.sowz.aestudio.core.AepxProjectInspector
 import com.sowz.aestudio.core.NativeEffectMapper
 import com.sowz.aestudio.core.NativeEffectStack
