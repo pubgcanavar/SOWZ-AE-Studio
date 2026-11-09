@@ -20,7 +20,8 @@ import com.sowz.aestudio.core.EditLayer
  */
 @UnstableApi
 internal class SowzLayerTransformEffect(
-    private val layer: EditLayer
+    private val layer: EditLayer,
+    private val timeOffsetMs: Long = 0L
 ) : GlEffect {
     override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean =
         layer.opacity.keyframes.isEmpty() &&
@@ -37,12 +38,13 @@ internal class SowzLayerTransformEffect(
             layer.rotationDegrees.initialValue == 0f
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
-        LayerShaderProgram(useHdr, layer)
+        LayerShaderProgram(useHdr, layer, timeOffsetMs)
 
     @UnstableApi
     private class LayerShaderProgram(
         useHdr: Boolean,
-        private val layer: EditLayer
+        private val layer: EditLayer,
+        private val timeOffsetMs: Long
     ) : BaseGlShaderProgram(useHdr, 1) {
         private var program: GlProgram? = null
 
@@ -62,7 +64,7 @@ internal class SowzLayerTransformEffect(
                 "SOWZ layer transform shader was not configured.",
                 presentationTimeUs
             )
-            val compositionTimeMs = presentationTimeUs.coerceAtLeast(0L) / 1_000L
+            val compositionTimeMs = presentationTimeUs.coerceAtLeast(0L) / 1_000L + timeOffsetMs
             val localTimeMs = (compositionTimeMs - layer.timelineStartMs)
                 .coerceIn(0L, layer.durationMs)
             val opacity = layer.opacity.valueAt(localTimeMs).coerceIn(0f, 1f)
