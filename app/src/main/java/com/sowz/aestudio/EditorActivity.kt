@@ -1266,6 +1266,7 @@ class EditorActivity : Activity() {
         if (::backgroundAudioGainSummary.isInitialized) {
             backgroundAudioGainSummary.text = backgroundAudioSettings.percentage.toString() + "% volume"
         }
+        refreshTimelineOverview()
     }
 
     private fun pickProject() {
