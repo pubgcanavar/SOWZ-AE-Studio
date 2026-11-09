@@ -9,9 +9,9 @@ android {
         applicationId = "com.sowz.aestudio"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.6.0"
-        testInstrumentationRunner = "android.test.runner.AndroidJUnitRunner"
+        versionCode = 18
+        versionName = "1.8.0"
+        testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
     buildTypes {
         debug {
@@ -36,4 +36,5 @@ dependencies {
     implementation("androidx.media3:media3-transformer:1.11.1")
     implementation("androidx.media3:media3-effect:1.11.1")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

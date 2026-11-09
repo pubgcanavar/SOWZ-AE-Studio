@@ -1,21 +1,33 @@
-name: Build SOWZ AE Studio APK
+name: Build SOWZ AE Studio Android
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "feature/android-effectcraft-wasm" ]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: sowz-ae-android-${{ github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: Test and build Android APK
+    name: Test and package native Android editor
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
-      - name: Checkout source
+      - name: Checkout SOWZ AE Studio and pinned AEP reader
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -30,23 +42,47 @@ jobs:
           packages: platform-tools
 
       - name: Install Android platform and build tools
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+
+      - name: Build AEP parser for Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/27.2.12479018"
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          cd native/aep-bridge
+          cargo test
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../../app/src/main/jniLibs build --release
 
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
 
-      - name: Run unit tests
+      - name: Run Android unit tests
         run: gradle testDebugUnitTest --no-daemon
 
-      - name: Build debug APK
+      - name: Build native Android debug APK
         run: gradle assembleDebug --no-daemon
 
-      - name: Upload APK artifact
+      - name: Verify native SOWZ editor APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          unzip -l "$APK" | grep -q "classes.dex"
+          if unzip -l "$APK" | grep -q "assets/effectcraft/"; then
+            echo "The removed embedded EffectCraft website must not be packaged."
+            exit 1
+          fi
+          echo "Native APK size:"
+          wc -c "$APK"
+
+      - name: Upload native SOWZ AE APK
         uses: actions/upload-artifact@v4
         with:
-          name: SOWZ-AE-Studio-debug-apk
+          name: SOWZ-AE-Studio-native-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14

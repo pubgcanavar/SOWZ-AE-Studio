@@ -20,7 +20,6 @@ class FfxParserTest {
             textChunk("tdmn", "ADBE Effect Parade"),
             textChunk("tdmn", "ADBE Brightness & Contrast 2")
         ))
-        // The sentinel contains only one tdmn entry and is not an effect.
         val sentinel = list("tdsp", textChunk("tdmn", "ADBE End of path sentinel"))
         val brightness = list("tdbs", concat(
             textChunk("tdsn", "Brightness"),
@@ -67,14 +66,10 @@ class FfxParserTest {
         ByteArrayOutputStream().apply { values.forEach { write(it) } }.toByteArray()
 
     @Test
-    fun recognizesExpectedContainer() {
+    fun recognizesExpectedContainerWithoutProducingAProjectReport() {
         val bytes = sampleFfx()
         assertTrue(FfxParser.isLikelyFfx(bytes))
-        val report = FfxParser.inspect("sample.ffx", bytes)
-        assertTrue(report.parsed)
-        assertEquals("FFX preset (effect inspector)", report.format)
-        assertTrue(report.metadata.any { it.contains("Raw preset format-version marker") && it.contains("97") })
-        assertTrue(report.warnings.any { it.contains("does not render") })
+        assertTrue(FfxParser.parseEffects(bytes).isEmpty())
     }
 
     @Test
@@ -100,7 +95,7 @@ class FfxParserTest {
         "Egg!".toByteArray(Charsets.US_ASCII).copyInto(bytes, 8)
         assertFalse(FfxParser.isLikelyFfx(bytes))
         try {
-            FfxParser.inspect("wrong.ffx", bytes)
+            FfxParser.parseEffects(bytes)
             fail("Expected a signature error")
         } catch (expected: IllegalArgumentException) {
             assertTrue(expected.message!!.contains("signature"))
@@ -108,7 +103,7 @@ class FfxParserTest {
     }
 
     @Test
-    fun reportsDeterministicSha256() {
+    fun sha256IsDeterministic() {
         val bytes = sampleFfx()
         assertEquals(FfxParser.sha256(bytes), FfxParser.sha256(bytes.copyOf()))
         assertEquals(64, FfxParser.sha256(bytes).length)

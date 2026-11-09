@@ -1,43 +1,37 @@
 # SOWZ AE Studio
 
-A native Android video-editing foundation. This project now performs real local video processing; it is still not a complete After Effects or Nova Editor replacement.
+SOWZ AE Studio is a native Android editing app. The launcher opens the SOWZ workspace, not a website or a desktop-sized embedded editor.
 
-## Current build — 0.6.0
+## Current native workflow — 1.5.0
 
-- **Import and preview:** pick a local video using Android's document picker and preview the main clip with Media3/ExoPlayer.
-- **Trim and sequential cut:** set IN/OUT points for the main clip, add up to 20 additional video clips, then render a sequential MP4 composition. Additional clips play at full duration after the trimmed main clip.
-- **Applied colour controls:** brightness and contrast adjustments; quarter-turn rotation (0°, 90°, 180°, 270°); text/title/watermark overlay.
-- **CC / 3D LUT:** import a standard `.cube` 3D colour lookup table. The LUT is applied to the main-clip preview and rendered output using Media3 `SingleColorLut`.
-- **Save/reopen projects:** the versioned `.sowzproj` file stores trim points, effects, text, LUT and source media URI references.
-- **After Effects file inspection:** inspect `.aep`, `.aepx`, `.aet` and ZIP project packages; decode `.ffx` effect names and supported static parameter values. In the video editor, a limited translator can apply static `ADBE Brightness & Contrast` values to the native brightness/contrast controls.
-- Dark graphite/orange UI with the SOWZ fox identity.
+- Home, Studio, FFX Presets and Settings are separate mobile sections.
+- Video import, local preview, source IN/OUT trim and a sequential clip queue.
+- Add clips, reorder them, duplicate/remove entries, and undo/redo queue changes.
+- Export the edited sequence to MP4.
+- Original-video audio gain plus a separate background music sequence for export.
+- Native colour controls: brightness, contrast, HSL hue/saturation/lightness, Gaussian blur and quarter-turn rotation.
+- Text overlay and standard 3D .cube LUT import.
+- Save and reopen editable .sowzproj settings and source URI references.
+- Local .ffx preset library: import and preserve original files, export them unchanged, delete them from the app library, and apply the currently supported static parameter subset from the editor.
 
-## Important compatibility limits
+## FFX support
 
-This is an incremental working editor, **not a full After Effects replacement**. Version 0.6.0 adds limited FFX inspection/application rather than general FFX compatibility.
+The app currently applies only non-animated ADBE Brightness & Contrast values when those parameters can be decoded from an FFX preset. Other effects can remain in the saved original preset, but are not rendered by SOWZ unless a native mapping is implemented and tested. Animation, expressions, masks and third-party plug-ins are not executed.
 
-- The sequential clip queue is not yet a full multi-track timeline. Only the main clip has trim handles and live preview; added clips play at full duration. There are no overlapping visual tracks or transitions yet.
-- The timeline/keyframe model has unit tests, but animated properties are not yet connected to a fully composited renderer/export timeline.
-- **`.cube` CC LUT support is real but scoped:** the current importer supports standalone 3D LUTs with sizes 2–64 and the standard `DOMAIN_MIN 0 0 0` / `DOMAIN_MAX 1 1 1` domain. It rejects 1D shaper tables and nonstandard domains rather than silently producing an incorrect result. Colour results may differ from After Effects because the host colour pipeline and LUT conventions are not universally identical.
-- **`.ffx` support is partial and explicitly scoped.** The parser now decodes effect match names and static numeric parameter values where the file structure is recognized. The editor translates only static `ADBE Brightness & Contrast` values into SOWZ's native brightness/contrast controls. It does not apply arbitrary FFX presets, animated/keyframed parameters, expressions, masks, third-party plug-ins, Deep Glow, Magic Bullet, or other effects unless a specific native mapping is implemented and tested. Unsupported effects are reported instead of being shown as applied.
-- Binary `.aep` inspection is structural and partial; `.aepx`/`.aet` inspection is best-effort XML. Original AEP projects are not edited or rendered.
-- After Effects `.aex` plug-ins are desktop binaries and cannot simply be installed into Android. Effects need Android-compatible implementations and individual compatibility tests.
-- AI upscaling, background removal, tracking, stabilisation, optical-flow interpolation and advanced speed curves are not implemented merely because they appear in the roadmap.
+This means FFX import is not universal plug-in compatibility. The UI distinguishes a stored preset from a preset whose values were actually applied.
 
-A preset/file being accepted is not proof that its effect can be reproduced correctly. The UI and documentation distinguish implemented functions from planned work.
+## What this app does not do
 
-## Research sources
-
-The public-facing [Frameify Studio page](https://frameify.wasmer.app/) was reviewed for product-level workflows such as canvas ratios, preview, timeline/layers, keyframes, text, effects, After Effects preset access and export settings. These features are independent design targets; this repository does not use private accounts, leaked credentials or non-public user data.
-
-For the CC LUT implementation, the app uses AndroidX Media3's public `SingleColorLut` API. See the [official Media3 editing guide](https://developer.android.com/media/implement/editing-app) and [SingleColorLut reference](https://developer.android.com/reference/androidx/media3/effect/SingleColorLut).
-
-The [FFX Compatibility Tool](https://github.com/marbou92/FFX-Compatibility-Tool) is a public MIT-licensed research candidate for understanding FFX metadata. Its desktop code has not been copied into this Android app.
+- It does not open or edit .aep files as working After Effects projects. The old AEP structure-report screen has been removed from the main app workflow.
+- It does not run desktop .aex plug-ins on Android.
+- It does not bundle the EffectCraft web app. The previous WebView screen was removed so it cannot overflow the phone layout or appear as a separate site inside SOWZ.
+- It is not yet a full overlapping multi-track motion-graphics compositor. The clip sequence is sequential; background audio is included in export, while the live preview is still video-source preview.
+- It does not claim full Nova Editor or After Effects feature parity.
 
 ## Build
 
-Open [GitHub Actions](https://github.com/pubgcanavar/SOWZ-AE-Studio/actions) and run **Build SOWZ AE Studio APK**. CI runs unit tests, builds a debug APK and uploads the artifact `SOWZ-AE-Studio-debug-apk` as a ZIP containing the APK.
+GitHub Actions runs unit tests, builds the native debug APK and uploads the artifact named SOWZ-AE-Studio-native-debug-apk.
 
 ## Privacy
 
-The editor processes selected videos on-device and does not intentionally upload source media. Export files are written to the location selected by the user. Project files store URI references instead of copying the source media, so original videos must remain accessible on the device for reopening.
+Selected source media stays on the device and is referenced by URI in .sowzproj. Imported FFX presets are copied into the app's private local storage. Export files are written to the location selected by the user.
