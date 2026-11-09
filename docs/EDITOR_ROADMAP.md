@@ -90,3 +90,25 @@ Acceptance: every supported FFX mapping is fixture-tested and its output compare
 2. CI compiles and tests every milestone; call an APK ready only after its exact artifact builds successfully.
 3. Keep source media local by default and do not collect telemetry without explicit design and privacy review.
 4. Respect third-party licences and trademarks; reuse code only where the licence permits it and preserve required notices.
+
+## 1.8.0 — Composition workspace, text layers and AEPX inspection
+
+Implemented on feature/android-effectcraft-wasm:
+
+- Native multi-track timeline with independent V/I/A/T/S lanes, time ruler, playhead, keyframe diamonds, touch selection and drag-to-move for supported video/text layers.
+- Native composition model for video, audio and editable text layers with time ranges, z-order, enabled state, and transform properties.
+- Per-layer transform keyframes for opacity, position X/Y, scale X/Y and rotation; linear and hold interpolation; previous/next keyframe navigation; transform evaluation from presentation timestamps.
+- Versioned bounded JSON persistence for the complete composition graph, text content/style and animated values inside .sowzproj.
+- Media3 CompositionPlayer preview for overlapping video/text layers and a background audio sequence; Transformer export uses independent sequences for overlapping video/text overlays.
+- Text layers render as transparent PNG sources with cached output. Cache identity includes text, colour, point size and composition dimensions.
+- Layer visibility toggle drives preview and export; the primary layer's own keyframes also activate the composition preview path.
+- Binary .aep inspection continues to use the pinned Rust parser and maps only supported static effect properties.
+- .aepx gets a bounded SAX structural scan with DTD/external-entity protections. It reports likely compositions, layers, footage and effect nodes but does not claim complete project reconstruction.
+
+### Compatibility boundaries
+
+- The composition renderer currently supports video and text visual tracks plus one background audio sequence. Image and shape track rendering, audio clip editing/automation, waveform display, effect-stack reorder and advanced easing are not complete.
+- AEPX scanning remains structural; bdata blocks and full property reconstruction are not converted into editable SOWZ layers.
+- Binary AEP scanning is not full-fidelity After Effects rendering. Unknown/animated/third-party AEP or FFX effects remain reported as unsupported unless a tested native mapping exists.
+- Desktop Adobe .aex plug-ins cannot be directly installed as Android plug-ins. SOWZ Shake is an independent native implementation, not a Sapphire binary or exact behaviour clone.
+- CI unit tests and APK build/packaging pass; physical Galaxy A25 preview, playback, UI layout and export performance still require device validation.
