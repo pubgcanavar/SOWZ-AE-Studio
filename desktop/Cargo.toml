@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 effectcraft-host = { git = "https://github.com/storytold/effectcraft", rev = "a41ff5015c6687db15a6f074a47b870b8f09fece" }
+effectcraft-engine = { git = "https://github.com/storytold/effectcraft", rev = "a41ff5015c6687db15a6f074a47b870b8f09fece" }
+serde_json = "1"
 effectcraft-ui-egui = { git = "https://github.com/storytold/effectcraft", rev = "a41ff5015c6687db15a6f074a47b870b8f09fece" }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "links", "wayland", "x11"] }
 rfd = "0.17"
