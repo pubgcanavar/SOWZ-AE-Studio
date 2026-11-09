@@ -1,8 +1,8 @@
-name: Build SOWZ AE Studio APK
+name: Build SOWZ AE Studio with EffectCraft
 
 on:
   push:
-    branches: [ "main", "feature/**" ]
+    branches: [ "feature/android-effectcraft-wasm" ]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
@@ -12,12 +12,59 @@ permissions:
 
 jobs:
   build:
-    name: Test and build Android APK
+    name: Test and package Android EffectCraft APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     steps:
-      - name: Checkout source
+      - name: Checkout SOWZ AE Studio
         uses: actions/checkout@v4
+
+      - name: Checkout pinned EffectCraft source
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/effectcraft
+          ref: a41ff5015c6687db15a6f074a47b870b8f09fece
+          path: effectcraft
+
+      - name: Set up Rust and WebAssembly target
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            effectcraft -> target
+
+      - name: Install matching wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+
+      - name: Build EffectCraft web editor and AEP importer
+        working-directory: effectcraft
+        env:
+          CARGO_TERM_COLOR: always
+        run: cargo xtask web
+
+      - name: Bundle EffectCraft and its required licence notices into Android assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s effectcraft/target/web/dist/index.html
+          test -s effectcraft/target/web/dist/effectcraft_web_bg.wasm
+          mkdir -p app/src/main/assets/effectcraft
+          cp -a effectcraft/target/web/dist/. app/src/main/assets/effectcraft/
+          mkdir -p app/src/main/assets/effectcraft/licenses
+          cp effectcraft/LICENSE-MIT app/src/main/assets/effectcraft/licenses/
+          cp effectcraft/LICENSE-APACHE app/src/main/assets/effectcraft/licenses/
+          cp effectcraft/NOTICE app/src/main/assets/effectcraft/licenses/
+          cp effectcraft/ATTRIBUTION.md app/src/main/assets/effectcraft/licenses/
+          # Upstream names and logos are trademarks and are not part of the software licence.
+          rm -f app/src/main/assets/effectcraft/favicon.svg
+          rm -f app/src/main/assets/effectcraft/icon-256.png
+          rm -f app/src/main/assets/effectcraft/icon-512.png
+          echo "Bundled WASM bytes:"
+          wc -c app/src/main/assets/effectcraft/effectcraft_web_bg.wasm
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -39,16 +86,26 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Run unit tests
+      - name: Run Android unit tests
         run: gradle testDebugUnitTest --no-daemon
 
-      - name: Build debug APK
+      - name: Build Android debug APK with bundled EffectCraft
         run: gradle assembleDebug --no-daemon
 
-      - name: Upload APK artifact
+      - name: Verify packaged editor assets are present in APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          unzip -l "$APK" | grep -q "assets/effectcraft/index.html"
+          unzip -l "$APK" | grep -q "assets/effectcraft/effectcraft_web_bg.wasm"
+          unzip -l "$APK" | grep -q "assets/effectcraft/licenses/LICENSE-MIT"
+
+      - name: Upload SOWZ AE Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: SOWZ-AE-Studio-debug-apk
+          name: SOWZ-AE-Studio-EffectCraft-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
