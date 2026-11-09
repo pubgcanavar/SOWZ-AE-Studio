@@ -637,7 +637,9 @@ class EditorActivity : Activity() {
         }
         layerEditActions.addView(button("Edit selected text", secondary = true) { editSelectedTextLayer() },
             LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(4f) })
-        layerEditActions.addView(button("Remove selected layer", secondary = true) { removeSelectedTimelineLayer() },
+        layerEditActions.addView(button("Toggle visibility", secondary = true) { toggleSelectedLayerVisibility() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginHorizontal = dp(3f) })
+        layerEditActions.addView(button("Remove layer", secondary = true) { removeSelectedTimelineLayer() },
             LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(4f) })
         add(timelinePanel, layerEditActions, top = 6)
 
@@ -1768,6 +1770,20 @@ class EditorActivity : Activity() {
         promptForTextLayer(selected)
     }
 
+    private fun toggleSelectedLayerVisibility() {
+        val id = selectedTimelineLayerId ?: return
+        val project = timelineProject ?: return
+        val layer = project.layers.firstOrNull { it.id == id } ?: return
+        runCatching {
+            timelineProject = TimelineEditorOps.setLayerEnabled(project, id, !layer.enabled)
+            refreshCompositionTimeline()
+            refreshLayerInspector()
+            refreshCompositionPreview()
+            status.text = if (layer.enabled) "Layer hidden." else "Layer visible."
+            status.setTextColor(green)
+        }.onFailure { toast(it.message ?: "Could not change layer visibility.") }
+    }
+
     private fun removeSelectedTimelineLayer() {
         val id = selectedTimelineLayerId ?: return
         val project = timelineProject ?: return
@@ -1882,10 +1898,20 @@ class EditorActivity : Activity() {
     private fun refreshCompositionPreview() {
         if (!::playerView.isInitialized || sourceUri == null || durationMs <= 0L) return
         val project = timelineProject
-        val needsCompositionPlayer = project?.layers?.any {
-            it.id != "main-video" && it.enabled &&
-                (it.kind == LayerKind.VIDEO || it.kind == LayerKind.TEXT)
-        } == true || backgroundAudioUri != null
+        val primaryLayerNeedsAnimation = project?.layers?.firstOrNull { it.id == "main-video" }?.let { layer ->
+            !layer.enabled ||
+                layer.opacity.initialValue < 0.9999f || layer.opacity.keyframes.isNotEmpty() ||
+                layer.positionX.initialValue != 0f || layer.positionX.keyframes.isNotEmpty() ||
+                layer.positionY.initialValue != 0f || layer.positionY.keyframes.isNotEmpty() ||
+                layer.scaleX.initialValue != 1f || layer.scaleX.keyframes.isNotEmpty() ||
+                layer.scaleY.initialValue != 1f || layer.scaleY.keyframes.isNotEmpty() ||
+                layer.rotationDegrees.initialValue != 0f || layer.rotationDegrees.keyframes.isNotEmpty()
+        } == true
+        val needsCompositionPlayer = primaryLayerNeedsAnimation ||
+            project?.layers?.any {
+                it.id != "main-video" && it.enabled &&
+                    (it.kind == LayerKind.VIDEO || it.kind == LayerKind.TEXT)
+            } == true || backgroundAudioUri != null
 
         if (!needsCompositionPlayer) {
             if (compositionPlayer != null) {
