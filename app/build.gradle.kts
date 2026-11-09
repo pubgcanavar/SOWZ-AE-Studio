@@ -11,7 +11,7 @@ android {
         targetSdk = 35
         versionCode = 14
         versionName = "1.4.0"
-        testInstrumentationRunner = "android.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "android.test.InstrumentationTestRunner"
     }
     buildTypes {
         debug {
@@ -30,7 +30,8 @@ android {
     kotlinOptions { jvmTarget = "17" }
     testOptions { unitTests.isReturnDefaultValues = true }
 }
-dependencies {\n    implementation("androidx.webkit:webkit:1.18.0")
+dependencies {
+    implementation("androidx.webkit:webkit:1.18.0")
     implementation("androidx.media3:media3-exoplayer:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
     implementation("androidx.media3:media3-transformer:1.11.1")
