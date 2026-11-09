@@ -2784,9 +2784,13 @@ class EditorActivity : Activity() {
                     .build()
             )
             .build()
+        val mainLayer = timelineProject?.layers?.firstOrNull { it.id == "main-video" }
+        val mainVideoEffects = buildVideoEffects().toMutableList().apply {
+            mainLayer?.let { add(SowzLayerTransformEffect(it, timeOffsetMs = clipStartMs)) }
+        }
         val editedItem = EditedMediaItem.Builder(clippedItem)
             .setSpeed(buildSpeedProvider(mainClipSpeed))
-            .setEffects(Effects(buildAudioProcessors(sourceAudioSettings.gain), buildVideoEffects()))
+            .setEffects(Effects(buildAudioProcessors(sourceAudioSettings.gain), mainVideoEffects))
             .build()
         val sequenceItems = mutableListOf(editedItem)
         additionalClipUris.forEachIndexed { index, clipUri ->
@@ -2808,7 +2812,47 @@ class EditorActivity : Activity() {
             )
         }
         val videoSequence = EditedMediaItemSequence.withAudioAndVideoFrom(sequenceItems)
-        val composition = backgroundAudioUri?.let { audioUri ->
+        val compositionSequences = mutableListOf(videoSequence)
+        val overlayLayers = timelineProject?.layers.orEmpty()
+            .filter { it.kind == LayerKind.VIDEO && it.id != "main-video" && it.enabled && !it.sourceUri.isNullOrBlank() }
+            .sortedBy { it.zIndex }
+
+        overlayLayers.forEach { layer ->
+            val overlapStart = maxOf(clipStartMs, layer.timelineStartMs)
+            val overlapEnd = minOf(clipEndMs, layer.timelineEndMs)
+            if (overlapEnd > overlapStart) {
+                val sourceIn = layer.sourceInMs + (overlapStart - layer.timelineStartMs)
+                val sourceOut = layer.sourceInMs + (overlapEnd - layer.timelineStartMs)
+                val overlayMedia = MediaItem.Builder()
+                    .setUri(Uri.parse(layer.sourceUri))
+                    .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                            .setStartPositionMs(sourceIn)
+                            .setEndPositionMs(sourceOut)
+                            .build()
+                    )
+                    .build()
+                val overlayItem = EditedMediaItem.Builder(overlayMedia)
+                    .setDurationUs((overlapEnd - overlapStart) * 1_000L)
+                    .setEffects(
+                        Effects(
+                            emptyList(),
+                            listOf(SowzLayerTransformEffect(layer, timeOffsetMs = clipStartMs))
+                        )
+                    )
+                    .build()
+                val overlaySequence = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
+                    .apply {
+                        val gapMs = overlapStart - clipStartMs
+                        if (gapMs > 0L) addGap(gapMs * 1_000L)
+                    }
+                    .addItem(overlayItem)
+                    .build()
+                compositionSequences.add(overlaySequence)
+            }
+        }
+
+        backgroundAudioUri?.let { audioUri ->
             val audioItem = EditedMediaItem.Builder(MediaItem.fromUri(audioUri))
                 .setEffects(Effects(buildAudioProcessors(backgroundAudioSettings.gain), emptyList()))
                 .build()
@@ -2816,10 +2860,12 @@ class EditorActivity : Activity() {
                 .buildUpon()
                 .setIsLooping(true)
                 .build()
-            Composition.Builder(videoSequence, audioSequence).build()
-        } ?: Composition.Builder(videoSequence).build()
-        exportClipCount = sequenceItems.size
-        status.text = "Rendering ${sequenceItems.size} clip(s)" + if (backgroundAudioUri != null) " with background audio…" else "… keep the app open until export finishes."
+            compositionSequences.add(audioSequence)
+        }
+        val composition = Composition.Builder(compositionSequences).build()
+        exportClipCount = sequenceItems.size + overlayLayers.size
+        status.text = "Rendering ${sequenceItems.size} clip(s) · ${overlayLayers.size} overlay track(s)" +
+            if (backgroundAudioUri != null) " with background audio…" else "… keep the app open until export finishes."
         status.setTextColor(accent)
         exportButton.isEnabled = false
         exportButton.alpha = 0.55f
