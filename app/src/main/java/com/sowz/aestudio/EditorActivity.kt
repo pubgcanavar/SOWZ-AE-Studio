@@ -510,6 +510,15 @@ class EditorActivity : Activity() {
                     player?.seekTo(safePosition)
                     timelineOverview.playheadMs = safePosition
                 }
+            },
+            onTrimRangeChanged = { newInMs, newOutMs ->
+                if (durationMs > 0L) {
+                    inPoint.progress = ((newInMs.toDouble() / durationMs) * SCALE_MAX)
+                        .toInt().coerceIn(0, SCALE_MAX)
+                    outPoint.progress = ((newOutMs.toDouble() / durationMs) * SCALE_MAX)
+                        .toInt().coerceIn(0, SCALE_MAX)
+                    updateTrimUi()
+                }
             }
         }
         timelinePanel.addView(timelineOverview)
