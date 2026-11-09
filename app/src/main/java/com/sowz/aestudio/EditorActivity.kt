@@ -40,6 +40,8 @@ import androidx.media3.transformer.Effects
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.ExperimentalApi
+import androidx.media3.transformer.CompositionPlayer
 import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
 import androidx.media3.effect.HslAdjustment
@@ -68,6 +70,12 @@ import com.sowz.aestudio.core.AepNativeReader
 import com.sowz.aestudio.core.AepProjectImporter
 import com.sowz.aestudio.core.NativeEffectMapper
 import com.sowz.aestudio.core.NativeEffectStack
+import com.sowz.aestudio.core.EditLayer
+import com.sowz.aestudio.core.LayerKind
+import com.sowz.aestudio.core.TimelineProject
+import com.sowz.aestudio.core.TimelineEditorOps
+import com.sowz.aestudio.core.TimelineProjectStore
+import com.sowz.aestudio.core.TransformProperty
 import com.sowz.aestudio.core.ColorGradeSettings
 import com.sowz.aestudio.core.FfxEffect
 import com.sowz.aestudio.core.FfxParser
@@ -83,7 +91,7 @@ import kotlin.math.min
  * Native video editing foundation: sequential clips, trim, text/color effects, transforms, saved projects and MP4 export.
  * This is intentionally a working foundation, not a claim of full After Effects compatibility.
  */
-@OptIn(UnstableApi::class)
+@OptIn(UnstableApi::class, ExperimentalApi::class)
 class EditorActivity : Activity() {
     private companion object {
         const val REQUEST_IMPORT_VIDEO = 2101
@@ -95,12 +103,16 @@ class EditorActivity : Activity() {
         const val REQUEST_IMPORT_FFX = 2107
         const val REQUEST_IMPORT_AUDIO = 2108
         const val REQUEST_IMPORT_AEP = 2109
+        const val REQUEST_ADD_VIDEO_LAYER = 2110
         const val SCALE_MAX = 1000
         const val MIN_CLIP_MS = 500L
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
+    private var compositionPlayer: CompositionPlayer? = null
+    private var timelineProject: TimelineProject? = null
+    private var selectedTimelineLayerId: String? = null
     private var transformer: Transformer? = null
     private var sourceUri: Uri? = null
     private var backgroundAudioUri: Uri? = null
@@ -145,6 +157,10 @@ class EditorActivity : Activity() {
     private lateinit var trimSummary: TextView
     private lateinit var clipQueueSummary: TextView
     private lateinit var timelineOverview: EffectCraftTimelineView
+    private lateinit var compositionTimelineView: MultiTrackTimelineView
+    private lateinit var selectedLayerSummary: TextView
+    private lateinit var keyframeSummary: TextView
+    private val transformSeekBars = mutableMapOf<TransformProperty, SeekBar>()
     private lateinit var clipQueueControls: LinearLayout
     private lateinit var undoQueueButton: TextView
     private lateinit var redoQueueButton: TextView
@@ -202,7 +218,7 @@ class EditorActivity : Activity() {
 
     private val syncPlayback = object : Runnable {
         override fun run() {
-            val activePlayer = player
+            val activePlayer = activePreviewPlayer()
             if (activePlayer != null && durationMs > 0) {
                 if (!draggingScrubber) {
                     scrubber.progress = ((activePlayer.currentPosition.coerceAtLeast(0L).toDouble() /
@@ -210,6 +226,11 @@ class EditorActivity : Activity() {
                 }
                 if (::timelineOverview.isInitialized) {
                     timelineOverview.playheadMs = activePlayer.currentPosition.coerceAtLeast(0L)
+                }
+                if (::compositionTimelineView.isInitialized) {
+                    compositionPlayheadMs = activePlayer.currentPosition.coerceAtLeast(0L)
+                    compositionTimelineView.playheadMs = compositionPlayheadMs
+                    refreshKeyframeSummary()
                 }
                 playbackTime.text = "${formatTime(activePlayer.currentPosition)} / ${formatTime(durationMs)}"
             }
@@ -257,6 +278,8 @@ class EditorActivity : Activity() {
         handler.removeCallbacks(syncExportProgress)
         transformer?.cancel()
         playerView.player = null
+        compositionPlayer?.release()
+        compositionPlayer = null
         player?.release()
         player = null
         temporaryOutput?.delete()
