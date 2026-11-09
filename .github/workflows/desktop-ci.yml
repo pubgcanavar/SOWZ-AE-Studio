@@ -1,0 +1,59 @@
+name: SOWZ AE Windows desktop build
+
+on:
+  push:
+    branches:
+      - "feature/**"
+    paths:
+      - "desktop/**"
+      - "engine/**"
+      - "third_party/effectcraft/**"
+      - "THIRD_PARTY_NOTICES.md"
+      - ".github/workflows/desktop-ci.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "engine/**"
+      - "third_party/effectcraft/**"
+      - "THIRD_PARTY_NOTICES.md"
+      - ".github/workflows/desktop-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    name: Build SOWZ AE for Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build release executable
+        run: cargo build --release --manifest-path desktop/Cargo.toml
+      - name: Assemble portable Windows package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = Join-Path $env:RUNNER_TEMP "SOWZ-AE-Windows-x64"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item "desktop/target/release/sowz-ae.exe" $package
+          Copy-Item "desktop/README-WINDOWS.txt" $package
+          Copy-Item "THIRD_PARTY_NOTICES.md" $package
+          Copy-Item "docs/SOWZ_AE_AEP_AND_PLUGIN_SUPPORT.md" $package
+          Copy-Item "third_party/effectcraft" (Join-Path $package "third_party/effectcraft") -Recurse
+          $zip = Join-Path $env:GITHUB_WORKSPACE "SOWZ-AE-Windows-x64.zip"
+          Compress-Archive -Path (Join-Path $package "*") -DestinationPath $zip -CompressionLevel Optimal
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  SOWZ-AE-Windows-x64.zip" | Out-File -FilePath (Join-Path $env:GITHUB_WORKSPACE "SOWZ-AE-Windows-x64.sha256") -Encoding ascii
+      - name: Upload portable Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: SOWZ-AE-Windows-x64
+          path: |
+            SOWZ-AE-Windows-x64.zip
+            SOWZ-AE-Windows-x64.sha256
+          if-no-files-found: error
+          retention-days: 30
