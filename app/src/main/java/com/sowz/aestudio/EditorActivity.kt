@@ -21,6 +21,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.HorizontalScrollView
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -309,13 +310,30 @@ class EditorActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(bg)
         }
+        val sectionTargets = linkedMapOf<String, View>()
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(19f), dp(17f), dp(19f), dp(13f))
+            setPadding(dp(18f), dp(12f), dp(18f), dp(10f))
         }
-        add(header, body("SOWZ  /  MOTION", 12f, accent, true))
-        add(header, body("Video editor", 24f, white, true), top = 3)
-        add(header, body("Import • trim • preview • export", 12f, muted), top = 3)
+        val toolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val back = body("‹  HOME", 11f, muted, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(11f), dp(8f), dp(11f), dp(8f))
+            background = rounded(surface2, 12f, border)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { finish() }
+        }
+        toolbar.addView(back)
+        toolbar.addView(body("SOWZ AE  /  STUDIO", 11f, accent, true).apply {
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        add(header, toolbar)
+        add(header, body("Video editor", 24f, white, true), top = 9)
+        add(header, body("Import  ·  trim  ·  preview  ·  export", 12f, muted), top = 3)
         root.addView(header, LinearLayout.LayoutParams(-1, -2))
 
         val scroll = ScrollView(this).apply {
@@ -324,9 +342,37 @@ class EditorActivity : Activity() {
             setPadding(dp(16f), dp(3f), dp(16f), dp(22f))
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         }
+        val sectionNav = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            setPadding(dp(12f), dp(2f), dp(12f), dp(8f))
+        }
+        val navRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        listOf("MEDIA", "VIEWER", "TIMELINE", "AUDIO", "EFFECTS", "FFX", "EXPORT").forEach { name ->
+            val chip = body(name, 10f, muted, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(12f), dp(9f), dp(12f), dp(9f))
+                background = rounded(surface2, 12f, border)
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    sectionTargets[name]?.let { target -> scroll.smoothScrollTo(0, target.top) }
+                }
+            }
+            navRow.addView(chip, LinearLayout.LayoutParams(-2, -2).apply {
+                if (navRow.childCount > 0) marginStart = dp(7f)
+            })
+        }
+        sectionNav.addView(navRow)
+        root.addView(sectionNav, LinearLayout.LayoutParams(-1, -2))
+
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         val sourcePanel = panel()
+        sectionTargets["MEDIA"] = sourcePanel
         add(sourcePanel, label("Media source"))
         add(sourcePanel, space(7))
         sourceLabel = body("No video imported yet", 14f, white, true)
@@ -337,6 +383,7 @@ class EditorActivity : Activity() {
         add(content, sourcePanel, bottom = 13)
 
         val previewPanel = panel()
+        sectionTargets["VIEWER"] = previewPanel
         add(previewPanel, label("Preview"))
         add(previewPanel, space(9))
         playerView = PlayerView(this).apply {
@@ -417,6 +464,7 @@ class EditorActivity : Activity() {
         add(content, trimPanel, bottom = 13)
 
         val timelinePanel = panel()
+        sectionTargets["TIMELINE"] = timelinePanel
         add(timelinePanel, label("Timeline sequence"))
         add(timelinePanel, body("Manage every queued clip: move it, duplicate it, or remove it. Export follows this order. The trim handles still apply to the main clip; added clips use their full duration.", 12f, muted), top = 5)
         clipQueueSummary = body("Main clip: none", 13f, white, true)
@@ -437,6 +485,7 @@ class EditorActivity : Activity() {
         add(content, timelinePanel, bottom = 13)
 
         val audioPanel = panel()
+        sectionTargets["AUDIO"] = audioPanel
         add(audioPanel, label("Background audio · separate track"))
         add(audioPanel, body("Balance the original clip sound against the added music. These mix controls affect MP4 export; the live viewer still previews the source clip without the extra track.", 12f, muted), top = 5)
         add(audioPanel, label("Original video audio"), top = 10)
@@ -487,6 +536,7 @@ class EditorActivity : Activity() {
         add(content, audioPanel, bottom = 13)
 
         val effectsPanel = panel()
+        sectionTargets["EFFECTS"] = effectsPanel
         add(effectsPanel, label("Color effects"))
         add(effectsPanel, body("Live preview and MP4 export share the same native GPU colour effects.", 12f, muted), top = 5)
         add(effectsPanel, label("Brightness"), top = 12)
@@ -623,6 +673,7 @@ class EditorActivity : Activity() {
         add(content, lutPanel, bottom = 13)
 
         val ffxPanel = panel()
+        sectionTargets["FFX"] = ffxPanel
         add(ffxPanel, label("After Effects preset library"))
         add(ffxPanel, body("Import .ffx presets, keep the originals in SOWZ, and apply the static effect values that have a tested native mapping.", 12f, muted), top = 5)
         ffxPresetSummary = body("No FFX preset applied", 13f, white, true)
@@ -667,6 +718,7 @@ class EditorActivity : Activity() {
         add(content, textPanel, bottom = 13)
 
         val exportPanel = panel()
+        sectionTargets["EXPORT"] = exportPanel
         add(exportPanel, label("Project and export"))
         add(exportPanel, body("Save your editable trim points and source reference, or render the selected range to MP4.", 12f, muted), top = 5)
         add(exportPanel, button("Save project (.sowzproj)", secondary = true) { startProjectSavePicker() }, top = 10)
