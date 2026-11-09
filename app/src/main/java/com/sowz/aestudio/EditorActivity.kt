@@ -64,6 +64,9 @@ import com.sowz.aestudio.core.ClipQueueSnapshot
 import com.sowz.aestudio.core.EditHistory
 import com.sowz.aestudio.core.AudioTrackSettings
 import com.sowz.aestudio.core.ColorGradeSettings
+import com.sowz.aestudio.core.FfxEffect
+import com.sowz.aestudio.core.FfxParser
+import com.sowz.aestudio.core.PresetStore
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
@@ -149,6 +152,7 @@ class EditorActivity : Activity() {
     private lateinit var speedSummary: TextView
     private lateinit var effectSummary: TextView
     private lateinit var lutSummary: TextView
+    private lateinit var ffxPresetSummary: TextView
     private lateinit var rotationSummary: TextView
     private val rotationButtons = mutableMapOf<Int, TextView>()
     private lateinit var textOverlaySummary: TextView
@@ -209,6 +213,12 @@ class EditorActivity : Activity() {
         window.navigationBarColor = bg
         setContentView(buildUi())
         handler.post(syncPlayback)
+        val requestedPreset = intent.getStringExtra("ffx_preset_name")
+        if (!requestedPreset.isNullOrBlank()) {
+            handler.postDelayed({ applyStoredFfxPreset(requestedPreset) }, 250L)
+        } else if (intent.getBooleanExtra("open_project_picker", false)) {
+            handler.postDelayed({ pickProject() }, 250L)
+        }
     }
 
     override fun onResume() {
@@ -333,7 +343,9 @@ class EditorActivity : Activity() {
             useController = true
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
             setBackgroundColor(Color.BLACK)
-            layoutParams = LinearLayout.LayoutParams(-1, dp(235f))
+            val widthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density - 32f
+            val previewHeightDp = minOf(235f, (widthDp * 9f / 16f).coerceAtLeast(150f))
+            layoutParams = LinearLayout.LayoutParams(-1, dp(previewHeightDp))
         }
         previewPanel.addView(playerView)
         playbackTime = body("00:00.000 / 00:00.000", 11f, muted)
@@ -598,8 +610,6 @@ class EditorActivity : Activity() {
         lutSummary = body("No .cube CC LUT loaded", 13f, white, true)
         add(lutPanel, lutSummary, top = 9)
         add(lutPanel, button("Import CC LUT (.cube)") { pickCubeLut() }, top = 10)
-        add(lutPanel, button("Import After Effects preset (.ffx)", secondary = true) { pickFfxPreset() }, top = 8)
-        add(lutPanel, body("FFX translation is limited to static Brightness & Contrast values. Other effects are listed but not falsely marked as applied.", 11f, muted), top = 5)
         add(lutPanel, button("Remove CC LUT", secondary = true) {
             lutLoadToken++
             selectedCubeLut = null
@@ -611,6 +621,16 @@ class EditorActivity : Activity() {
         }, top = 8)
         refreshCubeLutSummary()
         add(content, lutPanel, bottom = 13)
+
+        val ffxPanel = panel()
+        add(ffxPanel, label("After Effects preset library"))
+        add(ffxPanel, body("Import .ffx presets, keep the originals in SOWZ, and apply the static effect values that have a tested native mapping.", 12f, muted), top = 5)
+        ffxPresetSummary = body("No FFX preset applied", 13f, white, true)
+        add(ffxPanel, ffxPresetSummary, top = 9)
+        add(ffxPanel, button("＋  Import and apply .FFX") { pickFfxPreset() }, top = 10)
+        add(ffxPanel, button("Browse saved FFX presets", secondary = true) { showFfxPresetLibrary() }, top = 8)
+        add(ffxPanel, body("Current mapping: static ADBE Brightness & Contrast only. Other effects, animation and third-party plug-ins are stored but not applied.", 11f, muted), top = 7)
+        add(content, ffxPanel, bottom = 13)
 
         val transformPanel = panel()
         add(transformPanel, label("Transform"))
@@ -1641,90 +1661,140 @@ class EditorActivity : Activity() {
         } catch (_: Exception) {
             // Some document providers issue temporary grants only.
         }
-        status.text = "Reading and decoding FFX preset: $name…"
+        status.text = "Saving and decoding FFX preset: $name…"
         status.setTextColor(accent)
         Thread {
-            val result: Any = try {
-                val bytes = contentResolver.openInputStream(uri)?.use { input ->
-                    val output = ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    var total = 0
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        total += count
-                        require(total <= 32 * 1024 * 1024) { "The FFX file exceeds the 32 MB safety limit." }
-                        output.write(buffer, 0, count)
-                    }
-                    output.toByteArray()
-                } ?: error("Could not read the selected FFX file.")
-                require(com.sowz.aestudio.core.FfxParser.isLikelyFfx(bytes)) {
-                    "The file does not have the expected RIFX / FaFX / head signature."
-                }
-                com.sowz.aestudio.core.FfxParser.parseEffects(bytes)
-            } catch (error: Exception) {
-                error
+            val result = runCatching {
+                val store = PresetStore(this)
+                val entry = store.import(contentResolver, uri, name)
+                val effects = FfxParser.parseEffects(store.readBytes(entry))
+                entry.fileName to effects
             }
             handler.post {
-                if (result is Exception) {
-                    status.text = "Could not decode FFX: ${result.message ?: "unknown format"}"
+                result.onSuccess { (savedName, effects) ->
+                    applyParsedFfxPreset(savedName, effects)
+                }.onFailure { error ->
+                    status.text = "Could not import FFX: ${error.message ?: "unknown format"}"
                     status.setTextColor(accent)
-                    toast("FFX import failed. See the status message for details.")
-                    return@post
+                    toast("FFX import failed. Check that the file is a valid After Effects preset.")
                 }
-                val effects = (result as? List<*>)?.filterIsInstance<com.sowz.aestudio.core.FfxEffect>().orEmpty()
-                if (effects.isEmpty()) {
-                    status.text = "No usable effect blocks found. This preset may be animated, property-based, or use an unsupported layout."
-                    status.setTextColor(accent)
-                    toast("No compatible FFX effects were found.")
-                    return@post
-                }
-
-                val supported = effects.firstOrNull { effect ->
-                    effect.matchName.contains("Brightness & Contrast", ignoreCase = true) ||
-                        effect.displayName.contains("Brightness & Contrast", ignoreCase = true)
-                }
-                var didApply = false
-                var appliedName = ""
-                if (supported != null) {
-                    val brightness = supported.parameters.firstOrNull { it.name.equals("Brightness", ignoreCase = true) }
-                    val contrast = supported.parameters.firstOrNull { it.name.equals("Contrast", ignoreCase = true) }
-                    val canApplyBrightness = brightness?.value != null && !brightness.isAnimated
-                    val canApplyContrast = contrast?.value != null && !contrast.isAnimated
-                    if (canApplyBrightness || canApplyContrast) {
-                        if (canApplyBrightness) {
-                            brightnessValue = ((brightness!!.value!!.toFloat()) / 100f).coerceIn(-1f, 1f)
-                            brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
-                        }
-                        if (canApplyContrast) {
-                            contrastValue = ((contrast!!.value!!.toFloat()) / 100f).coerceIn(-1f, 1f)
-                            contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
-                        }
-                        updateColorValues()
-                        didApply = true
-                        appliedName = supported.displayName
-                    }
-                }
-
-                val skipped = effects.filterNot { it === supported }
-                val skippedNames = skipped.map { it.displayName }.distinct().take(4)
-                status.text = if (didApply) {
-                    buildString {
-                        append("Applied FFX subset: ").append(appliedName)
-                        append(". Found ").append(effects.size).append(" effect(s).")
-                        if (skipped.isNotEmpty()) append(" Not applied: ").append(skippedNames.joinToString(", "))
-                        if (supported?.parameters?.any { it.isAnimated } == true) append(". Animated properties were not reproduced.")
-                        append(" Review the result before export.")
-                    }
-                } else {
-                    "Decoded ${effects.size} effect(s), but no supported static Brightness & Contrast values were found. Detected: " +
-                        effects.map { it.displayName }.distinct().take(5).joinToString(", ")
-                }
-                status.setTextColor(if (didApply) green else accent)
-                toast(if (didApply) "Supported FFX color values applied." else "Preset inspected, but no compatible effect was applied.")
             }
         }.start()
     }
+
+    private fun showFfxPresetLibrary() {
+        val entries = PresetStore(this).list()
+        if (entries.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("FFX preset library")
+                .setMessage("No presets saved yet. Import an .ffx preset to add it to this library.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+        val labels = entries.map { it.fileName + "  ·  " + formatFileSize(it.sizeBytes) }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Apply saved FFX preset")
+            .setItems(labels) { _, index ->
+                entries.getOrNull(index)?.let { applyStoredFfxPreset(it.fileName) }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun applyStoredFfxPreset(fileName: String) {
+        val entry = PresetStore(this).list().firstOrNull { it.fileName == fileName }
+        if (entry == null) {
+            status.text = "This preset is no longer in the local library."
+            status.setTextColor(accent)
+            return
+        }
+        status.text = "Loading saved preset: $fileName…"
+        status.setTextColor(accent)
+        Thread {
+            val result = runCatching {
+                val bytes = PresetStore(this).readBytes(entry)
+                fileName to FfxParser.parseEffects(bytes)
+            }
+            handler.post {
+                result.onSuccess { (savedName, effects) ->
+                    applyParsedFfxPreset(savedName, effects)
+                }.onFailure { error ->
+                    status.text = "Could not read saved FFX: ${error.message ?: "unknown error"}"
+                    status.setTextColor(accent)
+                }
+            }
+        }.start()
+    }
+
+    private fun applyParsedFfxPreset(name: String, effects: List<FfxEffect>) {
+        if (::ffxPresetSummary.isInitialized) {
+            ffxPresetSummary.text = name
+            ffxPresetSummary.setTextColor(white)
+        }
+        if (effects.isEmpty()) {
+            status.text = "Preset saved, but no supported effect blocks could be decoded."
+            status.setTextColor(accent)
+            if (::ffxPresetSummary.isInitialized) {
+                ffxPresetSummary.text = "$name · stored, no values applied"
+            }
+            toast("FFX stored. No editable effect values were found.")
+            return
+        }
+
+        val supported = effects.firstOrNull { effect ->
+            effect.matchName.contains("Brightness & Contrast", ignoreCase = true) ||
+                effect.displayName.contains("Brightness & Contrast", ignoreCase = true)
+        }
+        var didApply = false
+        var appliedName = ""
+        if (supported != null) {
+            val brightness = supported.parameters.firstOrNull { it.name.equals("Brightness", ignoreCase = true) }
+            val contrast = supported.parameters.firstOrNull { it.name.equals("Contrast", ignoreCase = true) }
+            val canApplyBrightness = brightness?.value != null && !brightness.isAnimated
+            val canApplyContrast = contrast?.value != null && !contrast.isAnimated
+            if (canApplyBrightness || canApplyContrast) {
+                if (canApplyBrightness) {
+                    brightnessValue = ((brightness!!.value!!.toFloat()) / 100f).coerceIn(-1f, 1f)
+                    brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
+                }
+                if (canApplyContrast) {
+                    contrastValue = ((contrast!!.value!!.toFloat()) / 100f).coerceIn(-1f, 1f)
+                    contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
+                }
+                updateColorValues()
+                didApply = true
+                appliedName = supported.displayName
+            }
+        }
+
+        val skipped = effects.filterNot { it === supported }
+        val skippedNames = skipped.map { it.displayName }.distinct().take(4)
+        status.text = if (didApply) {
+            buildString {
+                append("Applied to the current clip: ").append(appliedName)
+                append(". Found ").append(effects.size).append(" effect(s).")
+                if (skipped.isNotEmpty()) append(" Not applied: ").append(skippedNames.joinToString(", "))
+                if (supported?.parameters?.any { it.isAnimated } == true) append(". Animated values were not reproduced.")
+                append(" Review the preview before export.")
+            }
+        } else {
+            "Preset saved, but no supported static Brightness & Contrast values were found. Detected: " +
+                effects.map { it.displayName }.distinct().take(5).joinToString(", ")
+        }
+        status.setTextColor(if (didApply) green else accent)
+        if (::ffxPresetSummary.isInitialized) {
+            ffxPresetSummary.text = if (didApply) "$name · $appliedName applied" else "$name · stored, not applied"
+        }
+        toast(if (didApply) "Supported FFX values applied to the current clip." else "Preset stored; no compatible values were applied.")
+    }
+
+    private fun formatFileSize(size: Long): String =
+        when {
+            size < 1024L -> "$size B"
+            size < 1024L * 1024L -> String.format(Locale.ROOT, "%.1f KB", size / 1024f)
+            else -> String.format(Locale.ROOT, "%.1f MB", size / (1024f * 1024f))
+        }
 
     private fun editTextOverlay() {
         val input = EditText(this).apply {
