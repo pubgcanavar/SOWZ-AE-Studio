@@ -243,6 +243,10 @@ class MainActivity : Activity() {
             addView(spacer(9))
             addView(actionButton("Import FFX preset", secondary = true) { if (!working) pickPresetFile() })
             addView(spacer(9))
+            addView(actionButton("Open EffectCraft motion editor  →") {
+                startActivity(Intent(this@MainActivity, EffectCraftActivity::class.java))
+            })
+            addView(spacer(9))
             addView(actionButton("Open video editor  →") {
                 startActivity(Intent(this@MainActivity, EditorActivity::class.java))
             })
