@@ -50,6 +50,19 @@ object AepxProjectInspector {
     private const val MAX_DEPTH = 96
     private const val MAX_EFFECT_LABELS = 2_000
 
+    private fun attributeValue(attributes: Attributes, wantedName: String): String? {
+        for (index in 0 until attributes.length) {
+            val qualified = attributes.getQName(index)
+            val local = attributes.getLocalName(index)
+            if (qualified.equals(wantedName, ignoreCase = true) ||
+                local.equals(wantedName, ignoreCase = true)
+            ) {
+                return attributes.getValue(index)
+            }
+        }
+        return null
+    }
+
     private class ScanHandler : DefaultHandler() {
         var elements = 0
             private set
@@ -91,10 +104,9 @@ object AepxProjectInspector {
                 effects.size < MAX_EFFECT_LABELS
             ) {
                 val label = sequenceOf(
-                    attributes.getValue("name"),
-                    attributes.getValue("matchName"),
-                    attributes.getValue("matchname"),
-                    attributes.getValue("id"),
+                    attributeValue(attributes, "matchName"),
+                    attributeValue(attributes, "name"),
+                    attributeValue(attributes, "id"),
                     tag
                 ).firstOrNull { !it.isNullOrBlank() } ?: tag
                 effects.add(label.take(180))
