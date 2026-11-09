@@ -34,14 +34,15 @@ class MainActivity : Activity() {
     private var working = false
     private var message: String? = null
     private var pendingExport: PresetEntry? = null
-    private val bg = Color.rgb(12, 13, 16)
-    private val surface = Color.rgb(21, 23, 29)
-    private val surface2 = Color.rgb(29, 32, 39)
-    private val border = Color.rgb(48, 52, 62)
-    private val accent = Color.rgb(255, 138, 50)
-    private val white = Color.rgb(244, 245, 247)
-    private val muted = Color.rgb(153, 160, 173)
-    private val green = Color.rgb(99, 216, 159)
+    // Match the EffectCraft dark workspace palette.
+    private val bg = Color.rgb(0x12, 0x12, 0x12)
+    private val surface = Color.rgb(0x1f, 0x1f, 0x1f)
+    private val surface2 = Color.rgb(0x23, 0x23, 0x23)
+    private val border = Color.rgb(0x34, 0x34, 0x34)
+    private val accent = Color.rgb(0x2d, 0x8c, 0xeb)
+    private val white = Color.rgb(0xc8, 0xc8, 0xc8)
+    private val muted = Color.rgb(0x9a, 0x9a, 0x9a)
+    private val green = Color.rgb(0x65, 0xb9, 0x8e)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
