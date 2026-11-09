@@ -1934,10 +1934,11 @@ class EditorActivity : Activity() {
 
     private fun loadAepProject(uri: Uri, flags: Int) {
         val name = queryDisplayName(uri)
-        if (!name.endsWith(".aep", ignoreCase = true)) {
-            status.text = "This reader currently expects a binary .aep file. AEPX XML import is not enabled."
+        val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        if (extension !in setOf("aep", "aepx")) {
+            status.text = "Choose a binary .aep or XML .aepx project."
             status.setTextColor(accent)
-            toast("Choose a binary .aep project.")
+            toast("Only .aep and .aepx project files are recognized.")
             return
         }
         try {
@@ -1949,7 +1950,7 @@ class EditorActivity : Activity() {
         } catch (_: Exception) {
             // Some document providers only issue temporary grants.
         }
-        status.text = "Reading After Effects project: $name…"
+        status.text = "Inspecting After Effects project: $name…"
         status.setTextColor(accent)
         Thread {
             val result = runCatching {
@@ -1962,37 +1963,55 @@ class EditorActivity : Activity() {
                         if (count < 0) break
                         total += count
                         require(total <= 96 * 1024 * 1024) {
-                            "AEP exceeds the 96 MiB on-device parser limit."
+                            "Project exceeds the 96 MiB on-device inspection limit."
                         }
                         output.write(buffer, 0, count)
                     }
                     output.toByteArray()
-                } ?: error("Could not read the selected AEP file.")
-                AepProjectImporter.parse(AepNativeReader().inspectAep(bytes))
+                } ?: error("Could not read the selected project.")
+                if (extension == "aepx") {
+                    "aepx" to AepxProjectInspector.inspect(bytes)
+                } else {
+                    "aep" to AepProjectImporter.parse(AepNativeReader().inspectAep(bytes))
+                }
             }
             handler.post {
-                result.onSuccess { summary ->
-                    val mapped = NativeEffectMapper.map(summary.effects)
-                    AlertDialog.Builder(this)
-                        .setTitle("AEP analysis · $name")
-                        .setMessage(
-                            summary.reportText() + "\n\nSOWZ-compatible static effects: " +
-                                if (mapped.hasSupportedValues) mapped.appliedEffects.joinToString(", ")
-                                else "none found"
-                        )
-                        .setPositiveButton(
-                            if (mapped.hasSupportedValues) "Apply compatible effects" else "Close"
-                        ) { _, _ ->
-                            if (mapped.hasSupportedValues) applyNativeEffectStack(mapped, name)
+                result.onSuccess { (format, summary) ->
+                    when (summary) {
+                        is com.sowz.aestudio.core.AepxProjectSummary -> {
+                            AlertDialog.Builder(this)
+                                .setTitle("AEPX XML inspection · $name")
+                                .setMessage(summary.reportText())
+                                .setPositiveButton("Close", null)
+                                .show()
+                            status.text = "AEPX inspected · ${summary.compositionCount} composition-like nodes · ${summary.layerCount} layer-like nodes"
+                            status.setTextColor(green)
                         }
-                        .setNegativeButton("Cancel", null)
-                        .show()
-                    status.text = "AEP scanned · ${summary.compositionCount} comps · ${summary.layerCount} layers · ${summary.effects.size} effects"
-                    status.setTextColor(green)
+                        is AepProjectSummary -> {
+                            val mapped = NativeEffectMapper.map(summary.effects)
+                            AlertDialog.Builder(this)
+                                .setTitle("AEP analysis · $name")
+                                .setMessage(
+                                    summary.reportText() + "\n\nSOWZ-compatible static effects: " +
+                                        if (mapped.hasSupportedValues) mapped.appliedEffects.joinToString(", ")
+                                        else "none found"
+                                )
+                                .setPositiveButton(
+                                    if (mapped.hasSupportedValues) "Apply compatible effects" else "Close"
+                                ) { _, _ ->
+                                    if (mapped.hasSupportedValues) applyNativeEffectStack(mapped, name)
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                            status.text = "AEP scanned · ${summary.compositionCount} comps · ${summary.layerCount} layers · ${summary.effects.size} effects"
+                            status.setTextColor(green)
+                        }
+                        else -> error("Unsupported inspection result for $format.")
+                    }
                 }.onFailure { error ->
-                    status.text = "Could not read AEP: ${error.message ?: "unknown parser error"}"
+                    status.text = "Could not inspect project: ${error.message ?: "unknown parser error"}"
                     status.setTextColor(accent)
-                    toast("AEP import failed. The file may use an unsupported or damaged structure.")
+                    toast("Project inspection failed. The file may be unsupported or damaged.")
                 }
             }
         }.start()
