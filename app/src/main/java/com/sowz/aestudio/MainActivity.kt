@@ -255,6 +255,13 @@ class MainActivity : Activity() {
         val entries = presetStore.list()
         add(parent, text("FFX Presets", 25f, white, true), bottom = 5)
         add(parent, text("Store original .ffx files here. Apply a preset from this library inside the native editor.", 13f, muted), bottom = 14)
+        message?.let {
+            val warning = card()
+            add(warning, text("PRESET STATUS", 11f, accent, true))
+            add(warning, spacer(5))
+            add(warning, text(it, 12f, muted))
+            add(parent, warning, bottom = 10)
+        }
         val import = card()
         add(import, label("PRESET LIBRARY"))
         add(import, spacer(7))
@@ -309,7 +316,7 @@ class MainActivity : Activity() {
         add(engine, spacer(8))
         add(engine, text("Native Android · Media3", 17f, white, true))
         add(engine, spacer(5))
-        add(engine, text("The editor runs inside the Android app. The previous embedded EffectCraft web screen is no longer part of the workflow.", 12f, muted))
+        add(engine, text("The editing workspace uses native Android screens and the Media3 playback and export pipeline.", 12f, muted))
         add(parent, engine, bottom = 12)
         val formats = card()
         add(formats, label("FORMAT SUPPORT"))
