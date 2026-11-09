@@ -65,7 +65,10 @@ data class EditLayer(
     val positionY: AnimatedFloat = AnimatedFloat(0f),
     val scaleX: AnimatedFloat = AnimatedFloat(1f),
     val scaleY: AnimatedFloat = AnimatedFloat(1f),
-    val rotationDegrees: AnimatedFloat = AnimatedFloat(0f)
+    val rotationDegrees: AnimatedFloat = AnimatedFloat(0f),
+    val contentText: String? = null,
+    val textColorArgb: Int = -1,
+    val textSizePx: Float = 64f
 ) {
     init {
         require(id.isNotBlank()) { "Layer id is required." }
@@ -74,6 +77,10 @@ data class EditLayer(
         require(sourceInMs >= 0 && sourceOutMs > sourceInMs) { "Layer source range is invalid." }
         require(kind !in setOf(LayerKind.VIDEO, LayerKind.IMAGE, LayerKind.AUDIO) || !sourceUri.isNullOrBlank()) {
             "Media layers need a source URI."
+        }
+        if (kind == LayerKind.TEXT) {
+            require(!contentText.isNullOrBlank()) { "Text layers need editable text content." }
+            require(textSizePx.isFinite() && textSizePx in 8f..512f) { "Text size is out of range." }
         }
     }
 
