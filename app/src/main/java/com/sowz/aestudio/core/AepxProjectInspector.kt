@@ -104,9 +104,9 @@ object AepxProjectInspector {
                 effects.size < MAX_EFFECT_LABELS
             ) {
                 val label = sequenceOf(
-                    attributeValue(attributes, "matchName"),
-                    attributeValue(attributes, "name"),
-                    attributeValue(attributes, "id"),
+                    AepxProjectInspector.attributeValue(attributes, "matchName"),
+                    AepxProjectInspector.attributeValue(attributes, "name"),
+                    AepxProjectInspector.attributeValue(attributes, "id"),
                     tag
                 ).firstOrNull { !it.isNullOrBlank() } ?: tag
                 effects.add(label.take(180))
