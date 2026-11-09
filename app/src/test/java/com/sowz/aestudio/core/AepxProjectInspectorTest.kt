@@ -21,7 +21,11 @@ class AepxProjectInspectorTest {
         assertEquals(1, result.compositionCount)
         assertEquals(1, result.layerCount)
         assertEquals(1, result.footageCount)
-        assertEquals(listOf("ADBE Gaussian Blur 2"), result.effectElements)
+        assertEquals(
+            "AEPX effect labels were: ${result.effectElements}",
+            listOf("ADBE Gaussian Blur 2"),
+            result.effectElements
+        )
     }
 
     @Test
