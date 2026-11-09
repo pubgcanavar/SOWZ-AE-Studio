@@ -148,7 +148,7 @@ class MainActivity : Activity() {
                 Tab.SETTINGS -> "App preferences"
             }, 12f, muted))
         }, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(text(if (working) "SAVING" else "1.5", 10f, if (working) green else muted, true).apply {
+        header.addView(text(if (working) "SAVING" else "1.6", 10f, if (working) green else muted, true).apply {
             gravity = Gravity.CENTER
             setPadding(d(10f), d(8f), d(10f), d(8f))
             background = rounded(surface2, 12f, border)
@@ -161,7 +161,7 @@ class MainActivity : Activity() {
         val hero = card().apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.rgb(52, 34, 26), Color.rgb(27, 25, 29), Color.rgb(20, 22, 28))
+                intArrayOf(Color.rgb(28, 45, 64), Color.rgb(27, 32, 39), Color.rgb(20, 22, 28))
             ).apply {
                 cornerRadius = d(25f).toFloat()
                 setStroke(d(1f), Color.rgb(91, 57, 39))
