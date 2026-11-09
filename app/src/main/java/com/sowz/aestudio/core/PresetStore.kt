@@ -27,8 +27,11 @@ class PresetStore(context: Context) {
         val safeName = sanitize(sourceName)
         val bytes = resolver.openInputStream(uri)?.use { readBounded(it, MAX_PRESET_BYTES) }
             ?: throw IllegalArgumentException("Could not read this preset file.")
-        // Validate before saving; a renamed non-FFX file should not enter the preset library.
-        FfxParser.inspect(safeName, bytes)
+        // Validate the RIFX / FaFX container and safely decode the recognized parameter tree.
+        require(FfxParser.isLikelyFfx(bytes)) {
+            "This file does not have the expected RIFX / FaFX / head signature."
+        }
+        FfxParser.parseEffects(bytes)
         var target = File(directory, safeName)
         if (target.exists()) {
             val base = safeName.substringBeforeLast('.', safeName)
@@ -51,7 +54,7 @@ class PresetStore(context: Context) {
     fun readBytes(entry: PresetEntry): ByteArray {
         val file = requireOwned(entry.file)
         if (!file.exists() || !file.isFile) throw IllegalArgumentException("This preset is no longer in the library.")
-        if (file.length() > MAX_PRESET_BYTES) throw IllegalArgumentException("Preset exceeds the 64 MB safety limit.")
+        if (file.length() > MAX_PRESET_BYTES) throw IllegalArgumentException("Preset exceeds the 32 MB safety limit.")
         return file.readBytes()
     }
 
@@ -92,6 +95,6 @@ class PresetStore(context: Context) {
     }
 
     companion object {
-        const val MAX_PRESET_BYTES = 64L * 1024L * 1024L
+        const val MAX_PRESET_BYTES = 32L * 1024L * 1024L
     }
 }
