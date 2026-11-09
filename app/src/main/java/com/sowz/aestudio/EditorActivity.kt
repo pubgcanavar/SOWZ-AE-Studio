@@ -623,7 +623,10 @@ class EditorActivity : Activity() {
         layerActions.addView(button("＋ Video", secondary = true) { pickVideoLayer() },
             LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(4f) })
         layerActions.addView(button("＋ Audio", secondary = true) { pickBackgroundAudio() },
-            LinearLayout.LayoutParams(0, -2, 1f).apply { marginHorizontal = dp(3f) })
+            LinearLayout.LayoutParams(0, -2, 1f).apply {
+                marginStart = dp(3f)
+                marginEnd = dp(3f)
+            })
         layerActions.addView(button("＋ Text", secondary = true) { promptForTextLayer() },
             LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(4f) })
         add(timelinePanel, layerActions, top = 8)
@@ -1687,6 +1690,139 @@ class EditorActivity : Activity() {
                 }
             }
         }.start()
+    }
+
+    private fun promptForTextLayer(existing: EditLayer? = null) {
+        val project = timelineProject ?: run {
+            toast("Import the main video before adding a text layer.")
+            return
+        }
+        val input = EditText(this).apply {
+            setText(existing?.contentText ?: "SOWZ")
+            hint = "Type your title or caption"
+            minLines = 2
+            maxLines = 5
+            setTextColor(white)
+            setHintTextColor(muted)
+            setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "New text layer" else "Edit text layer")
+            .setMessage("Text is rendered as a transparent composition layer. You can move it and animate its transform.")
+            .setView(input)
+            .setPositiveButton(if (existing == null) "Add layer" else "Save text") { _, _ ->
+                val value = input.text?.toString()?.trim()?.take(4_000).orEmpty()
+                if (value.isBlank()) {
+                    toast("Text content cannot be empty.")
+                    return@setPositiveButton
+                }
+                runCatching {
+                    val updated = if (existing != null) {
+                        project.replaceLayer(
+                            existing.copy(
+                                name = value.lineSequence().firstOrNull().orEmpty().take(28),
+                                contentText = value
+                            )
+                        )
+                    } else {
+                        val start = compositionPlayheadMs.coerceIn(0L, (project.durationMs - 1L).coerceAtLeast(0L))
+                        val zIndex = (project.layers.filter { it.kind != LayerKind.AUDIO }
+                            .maxOfOrNull { it.zIndex } ?: 0) + 1
+                        val layer = EditLayer(
+                            id = "text-${System.currentTimeMillis()}",
+                            name = value.lineSequence().firstOrNull().orEmpty().take(28).ifBlank { "Text" },
+                            kind = LayerKind.TEXT,
+                            sourceUri = null,
+                            timelineStartMs = start,
+                            sourceInMs = 0L,
+                            sourceOutMs = (project.durationMs - start).coerceAtLeast(1L),
+                            zIndex = zIndex,
+                            contentText = value,
+                            textColorArgb = Color.WHITE,
+                            textSizePx = 76f
+                        )
+                        TimelineEditorOps.addLayer(project, layer)
+                    }
+                    timelineProject = updated
+                    selectedTimelineLayerId = if (existing == null) updated.layers.last().id else existing.id
+                    refreshCompositionTimeline()
+                    refreshLayerInspector()
+                    refreshCompositionPreview()
+                    status.text = if (existing == null) "Text layer added to the composition." else "Text layer updated."
+                    status.setTextColor(green)
+                }.onFailure { error ->
+                    toast(error.message ?: "Could not update the text layer.")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun editSelectedTextLayer() {
+        val selected = timelineProject?.layers?.firstOrNull { it.id == selectedTimelineLayerId }
+        if (selected?.kind != LayerKind.TEXT) {
+            toast("Select a text layer first.")
+            return
+        }
+        promptForTextLayer(selected)
+    }
+
+    private fun removeSelectedTimelineLayer() {
+        val id = selectedTimelineLayerId ?: return
+        val project = timelineProject ?: return
+        val layer = project.layers.firstOrNull { it.id == id } ?: return
+        if (layer.id == "main-video") {
+            toast("The primary source layer cannot be removed. Import another source to replace it.")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Remove layer")
+            .setMessage("Remove \"${layer.name}\" from this composition?")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Remove") { _, _ ->
+                timelineProject = project.removeLayer(id)
+                if (layer.kind == LayerKind.AUDIO) backgroundAudioUri = null
+                selectedTimelineLayerId = timelineProject?.layers?.firstOrNull()?.id
+                refreshCompositionTimeline()
+                refreshLayerInspector()
+                refreshCompositionPreview()
+                refreshBackgroundAudioControls()
+                status.text = "Layer removed from the composition."
+                status.setTextColor(muted)
+            }
+            .show()
+    }
+
+    private fun createTimelineLayerMediaItem(
+        layer: EditLayer,
+        durationMs: Long,
+        project: TimelineProject,
+        sourceInMs: Long = layer.sourceInMs,
+        sourceOutMs: Long = layer.sourceOutMs
+    ): MediaItem {
+        require(durationMs > 0L) { "Layer duration must be positive." }
+        return when (layer.kind) {
+            LayerKind.VIDEO -> {
+                val source = layer.sourceUri ?: error("Video layer has no source file.")
+                MediaItem.Builder()
+                    .setUri(Uri.parse(source))
+                    .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                            .setStartPositionMs(sourceInMs)
+                            .setEndPositionMs(sourceOutMs)
+                            .build()
+                    )
+                    .build()
+            }
+            LayerKind.TEXT -> {
+                val file = SowzTextLayerRenderer.render(this, layer, project.width, project.height)
+                MediaItem.Builder()
+                    .setUri(Uri.fromFile(file))
+                    .setImageDurationMs(durationMs)
+                    .build()
+            }
+            else -> error("This layer type does not have a video renderer yet: ${layer.kind}")
+        }
     }
 
     private fun createPreviewComposition(): Composition {
