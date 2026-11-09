@@ -510,7 +510,7 @@ class EditorActivity : Activity() {
                     player?.seekTo(safePosition)
                     timelineOverview.playheadMs = safePosition
                 }
-            },
+            }
             onTrimRangeChanged = { newInMs, newOutMs ->
                 if (durationMs > 0L) {
                     inPoint.progress = ((newInMs.toDouble() / durationMs) * SCALE_MAX)
