@@ -638,7 +638,10 @@ class EditorActivity : Activity() {
         layerEditActions.addView(button("Edit selected text", secondary = true) { editSelectedTextLayer() },
             LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(4f) })
         layerEditActions.addView(button("Toggle visibility", secondary = true) { toggleSelectedLayerVisibility() },
-            LinearLayout.LayoutParams(0, -2, 1f).apply { marginHorizontal = dp(3f) })
+            LinearLayout.LayoutParams(0, -2, 1f).apply {
+                marginStart = dp(3f)
+                marginEnd = dp(3f)
+            })
         layerEditActions.addView(button("Remove layer", secondary = true) { removeSelectedTimelineLayer() },
             LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(4f) })
         add(timelinePanel, layerEditActions, top = 6)
