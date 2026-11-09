@@ -69,6 +69,34 @@ class TimelineEditorOpsTest {
     }
 
     @Test
+    fun textLayerContentAndStyleSurviveProjectSerialization() {
+        val text = EditLayer(
+            id = "title-1",
+            name = "Title",
+            kind = LayerKind.TEXT,
+            sourceUri = null,
+            timelineStartMs = 500L,
+            sourceInMs = 0L,
+            sourceOutMs = 4_000L,
+            zIndex = 3,
+            contentText = "SOWZ AE",
+            textColorArgb = 0xff33aaff.toInt(),
+            textSizePx = 92f
+        )
+        val project = TimelineProject(
+            id = "text-project",
+            name = "Text composition",
+            durationMs = 5_000L,
+            layers = listOf(text)
+        )
+        val decoded = TimelineProjectStore.decode(TimelineProjectStore.encode(project))
+        assertEquals("SOWZ AE", decoded.layers.single().contentText)
+        assertEquals(text.textColorArgb, decoded.layers.single().textColorArgb)
+        assertEquals(92f, decoded.layers.single().textSizePx, 0.001f)
+        assertEquals(text, decoded.layers.single())
+    }
+
+    @Test
     fun serializationRoundTripsAnimatedLayers() {
         var project = sampleProject()
         project = TimelineEditorOps.addKeyframe(
