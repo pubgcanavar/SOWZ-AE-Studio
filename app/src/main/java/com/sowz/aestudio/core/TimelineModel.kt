@@ -33,7 +33,7 @@ data class AnimatedFloat(
 
     fun valueAt(timeMs: Long): Float {
         if (ordered.isEmpty()) return initialValue
-        if (timeMs <= ordered.first().timeMs) return ordered.first().value
+        if (timeMs < ordered.first().timeMs) return initialValue
         if (timeMs >= ordered.last().timeMs) return ordered.last().value
 
         val leftIndex = ordered.indexOfLast { it.timeMs <= timeMs }.coerceAtLeast(0)
