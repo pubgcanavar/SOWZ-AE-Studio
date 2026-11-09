@@ -30,6 +30,10 @@ internal class EffectCraftTimelineView(context: Context) : View(context) {
     var hasAudioTrack: Boolean = false
         set(value) { field = value; invalidate() }
     var onSeekPosition: ((Long) -> Unit)? = null
+    var onTrimRangeChanged: ((Long, Long) -> Unit)? = null
+
+    private enum class DragMode { NONE, PLAYHEAD, IN_POINT, OUT_POINT }
+    private var dragMode = DragMode.NONE
 
     private val density = resources.displayMetrics.density
     private fun dp(value: Float) = value * density
@@ -61,6 +65,10 @@ internal class EffectCraftTimelineView(context: Context) : View(context) {
         color = 0xffd7d7d7.toInt()
         textSize = dp(9.5f)
         typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+    }
+    private val trimHandlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xffe6e6e6.toInt()
+        strokeWidth = dp(2f)
     }
 
     private val timeLeft get() = dp(43f)
@@ -111,6 +119,11 @@ internal class EffectCraftTimelineView(context: Context) : View(context) {
             if (selected.width() > dp(76f)) {
                 canvas.drawText("SOURCE VIDEO", selected.left + dp(7f), videoTop + dp(17f), brightTextPaint)
             }
+            // Visible IN/OUT handles: drag either edge to adjust the export range.
+            canvas.drawLine(selected.left, videoTop - dp(3f), selected.left, videoBottom + dp(3f), trimHandlePaint)
+            canvas.drawLine(selected.right, videoTop - dp(3f), selected.right, videoBottom + dp(3f), trimHandlePaint)
+            canvas.drawCircle(selected.left, videoTop, dp(3f), trimHandlePaint)
+            canvas.drawCircle(selected.right, videoTop, dp(3f), trimHandlePaint)
         }
 
         val audioLane = RectF(timeLeft, audioTop, timeRight, audioBottom)
@@ -138,26 +151,55 @@ internal class EffectCraftTimelineView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (durationMs <= 0L || onSeekPosition == null) return false
+        if (durationMs <= 0L) return false
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                updatePlayheadFromX(event.x)
+            MotionEvent.ACTION_DOWN -> {
+                val leftX = timeLeft + timeWidth * (inMs.toFloat() / durationMs.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
+                val rightX = timeLeft + timeWidth * (outMs.toFloat() / durationMs.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
+                val handleSlop = dp(16f)
+                dragMode = when {
+                    kotlin.math.abs(event.x - leftX) <= handleSlop && onTrimRangeChanged != null -> DragMode.IN_POINT
+                    kotlin.math.abs(event.x - rightX) <= handleSlop && onTrimRangeChanged != null -> DragMode.OUT_POINT
+                    else -> DragMode.PLAYHEAD
+                }
+                updateDrag(event.x)
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                updateDrag(event.x)
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                updatePlayheadFromX(event.x)
-                onSeekPosition?.invoke(playheadMs)
+                updateDrag(event.x)
+                when (dragMode) {
+                    DragMode.PLAYHEAD -> onSeekPosition?.invoke(playheadMs)
+                    DragMode.IN_POINT, DragMode.OUT_POINT -> onTrimRangeChanged?.invoke(inMs, outMs)
+                    DragMode.NONE -> Unit
+                }
+                dragMode = DragMode.NONE
+                parent?.requestDisallowInterceptTouchEvent(false)
                 performClick()
                 return true
             }
-            MotionEvent.ACTION_CANCEL -> return true
+            MotionEvent.ACTION_CANCEL -> {
+                dragMode = DragMode.NONE
+                parent?.requestDisallowInterceptTouchEvent(false)
+                return true
+            }
         }
         return true
     }
 
-    private fun updatePlayheadFromX(x: Float) {
+    private fun updateDrag(x: Float) {
         val fraction = ((x - timeLeft) / timeWidth).coerceIn(0f, 1f)
-        playheadMs = (durationMs * fraction).toLong()
+        val position = (durationMs * fraction).toLong()
+        when (dragMode) {
+            DragMode.PLAYHEAD -> playheadMs = position
+            DragMode.IN_POINT -> inMs = position.coerceAtMost((outMs - 500L).coerceAtLeast(0L))
+            DragMode.OUT_POINT -> outMs = position.coerceAtLeast((inMs + 500L).coerceAtMost(durationMs))
+            DragMode.NONE -> Unit
+        }
     }
 
     override fun performClick(): Boolean {
