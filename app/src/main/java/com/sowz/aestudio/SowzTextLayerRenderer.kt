@@ -27,7 +27,8 @@ internal object SowzTextLayerRenderer {
 
         val text = layer.contentText.orEmpty().take(4_000)
         val cacheName = "sowz-text-${Integer.toHexString(layer.id.hashCode())}-" +
-            "${Integer.toHexString(text.hashCode())}-${width}x${height}.png"
+            "${Integer.toHexString(text.hashCode())}-${layer.textColorArgb.toUInt().toString(16)}-" +
+            "${layer.textSizePx.toBits().toUInt().toString(16)}-${width}x${height}.png"
         val output = File(context.cacheDir, cacheName)
         if (output.isFile && output.length() > 0L) return output
 
