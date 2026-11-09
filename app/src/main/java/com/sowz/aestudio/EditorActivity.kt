@@ -2966,7 +2966,12 @@ class EditorActivity : Activity() {
         val videoSequence = EditedMediaItemSequence.withAudioAndVideoFrom(sequenceItems)
         val compositionSequences = mutableListOf(videoSequence)
         val overlayLayers = timelineProject?.layers.orEmpty()
-            .filter { it.kind == LayerKind.VIDEO && it.id != "main-video" && it.enabled && !it.sourceUri.isNullOrBlank() }
+            .filter {
+                it.id != "main-video" && it.enabled && (
+                    (it.kind == LayerKind.VIDEO && !it.sourceUri.isNullOrBlank()) ||
+                        (it.kind == LayerKind.TEXT && !it.contentText.isNullOrBlank())
+                    )
+            }
             .sortedBy { it.zIndex }
 
         overlayLayers.forEach { layer ->
@@ -2975,15 +2980,14 @@ class EditorActivity : Activity() {
             if (overlapEnd > overlapStart) {
                 val sourceIn = layer.sourceInMs + (overlapStart - layer.timelineStartMs)
                 val sourceOut = layer.sourceInMs + (overlapEnd - layer.timelineStartMs)
-                val overlayMedia = MediaItem.Builder()
-                    .setUri(Uri.parse(layer.sourceUri))
-                    .setClippingConfiguration(
-                        MediaItem.ClippingConfiguration.Builder()
-                            .setStartPositionMs(sourceIn)
-                            .setEndPositionMs(sourceOut)
-                            .build()
-                    )
-                    .build()
+                val overlayDurationMs = overlapEnd - overlapStart
+                val overlayMedia = createTimelineLayerMediaItem(
+                    layer = layer,
+                    durationMs = overlayDurationMs,
+                    project = timelineProject ?: error("Composition is not available."),
+                    sourceInMs = sourceIn,
+                    sourceOutMs = sourceOut
+                )
                 val overlayItem = EditedMediaItem.Builder(overlayMedia)
                     .setDurationUs((overlapEnd - overlapStart) * 1_000L)
                     .setEffects(
