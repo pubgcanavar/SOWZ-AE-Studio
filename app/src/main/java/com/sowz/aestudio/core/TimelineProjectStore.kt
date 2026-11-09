@@ -76,6 +76,9 @@ object TimelineProjectStore {
         .put("scaleX", animatedToJson(layer.scaleX))
         .put("scaleY", animatedToJson(layer.scaleY))
         .put("rotationDegrees", animatedToJson(layer.rotationDegrees))
+        .put("contentText", layer.contentText)
+        .put("textColorArgb", layer.textColorArgb)
+        .put("textSizePx", layer.textSizePx.toDouble())
 
     private fun animatedToJson(animated: AnimatedFloat) = JSONObject()
         .put("initialValue", animated.initialValue.toDouble())
@@ -110,7 +113,10 @@ object TimelineProjectStore {
             positionY = animatedFromJson(json.optJSONObject("positionY"), 0f),
             scaleX = animatedFromJson(json.optJSONObject("scaleX"), 1f),
             scaleY = animatedFromJson(json.optJSONObject("scaleY"), 1f),
-            rotationDegrees = animatedFromJson(json.optJSONObject("rotationDegrees"), 0f)
+            rotationDegrees = animatedFromJson(json.optJSONObject("rotationDegrees"), 0f),
+            contentText = json.optString("contentText").takeIf { it.isNotBlank() && it != "null" },
+            textColorArgb = json.optInt("textColorArgb", -1),
+            textSizePx = json.optDouble("textSizePx", 64.0).toFloat()
         )
     }
 
