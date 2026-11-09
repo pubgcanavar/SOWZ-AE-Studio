@@ -1846,20 +1846,17 @@ class EditorActivity : Activity() {
         )
 
         project.layers
-            .filter { it.kind == LayerKind.VIDEO && it.id != "main-video" && it.enabled && !it.sourceUri.isNullOrBlank() }
+            .filter {
+                it.id != "main-video" && it.enabled && (
+                    (it.kind == LayerKind.VIDEO && !it.sourceUri.isNullOrBlank()) ||
+                        (it.kind == LayerKind.TEXT && !it.contentText.isNullOrBlank())
+                    )
+            }
             .sortedBy { it.zIndex }
             .forEach { layer ->
                 val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
                 if (layer.timelineStartMs > 0L) builder.addGap(layer.timelineStartMs * 1_000L)
-                val media = MediaItem.Builder()
-                    .setUri(Uri.parse(layer.sourceUri))
-                    .setClippingConfiguration(
-                        MediaItem.ClippingConfiguration.Builder()
-                            .setStartPositionMs(layer.sourceInMs)
-                            .setEndPositionMs(layer.sourceOutMs)
-                            .build()
-                    )
-                    .build()
+                val media = createTimelineLayerMediaItem(layer, layer.durationMs, project)
                 val edited = EditedMediaItem.Builder(media)
                     .setDurationUs(layer.durationMs * 1_000L)
                     .setEffects(Effects(emptyList(), listOf(SowzLayerTransformEffect(layer))))
@@ -1885,7 +1882,8 @@ class EditorActivity : Activity() {
         if (!::playerView.isInitialized || sourceUri == null || durationMs <= 0L) return
         val project = timelineProject
         val needsCompositionPlayer = project?.layers?.any {
-            it.kind == LayerKind.VIDEO && it.id != "main-video" && it.enabled
+            it.id != "main-video" && it.enabled &&
+                (it.kind == LayerKind.VIDEO || it.kind == LayerKind.TEXT)
         } == true || backgroundAudioUri != null
 
         if (!needsCompositionPlayer) {
