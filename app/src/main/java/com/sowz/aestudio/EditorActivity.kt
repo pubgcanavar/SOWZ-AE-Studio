@@ -1480,6 +1480,425 @@ class EditorActivity : Activity() {
         refreshTimelineOverview()
     }
 
+    private fun activePreviewPlayer(): Player? = compositionPlayer ?: player
+
+    private fun refreshCompositionTimeline() {
+        if (!::compositionTimelineView.isInitialized) return
+        compositionTimelineView.project = timelineProject
+        compositionTimelineView.selectedLayerId = selectedTimelineLayerId
+        compositionTimelineView.playheadMs = compositionPlayheadMs
+    }
+
+    private fun initialiseTimelineProject(uri: Uri, sourceDurationMs: Long) {
+        val mainLayer = EditLayer(
+            id = "main-video",
+            name = queryDisplayName(uri),
+            kind = LayerKind.VIDEO,
+            sourceUri = uri.toString(),
+            timelineStartMs = 0L,
+            sourceInMs = 0L,
+            sourceOutMs = sourceDurationMs.coerceAtLeast(1L),
+            zIndex = 0
+        )
+        val restored = pendingTimelineProject
+        pendingTimelineProject = null
+        timelineProject = if (restored == null) {
+            TimelineProject(
+                id = "sowz-${System.currentTimeMillis()}",
+                name = queryDisplayName(uri).substringBeforeLast('.').ifBlank { "Untitled Composition" },
+                width = 1080,
+                height = 1920,
+                frameRate = 30,
+                durationMs = sourceDurationMs.coerceAtLeast(1L),
+                layers = listOf(mainLayer)
+            )
+        } else {
+            val kept = restored.layers.mapNotNull { layer ->
+                when {
+                    layer.id == "main-video" -> mainLayer.copy(
+                        opacity = layer.opacity,
+                        positionX = layer.positionX,
+                        positionY = layer.positionY,
+                        scaleX = layer.scaleX,
+                        scaleY = layer.scaleY,
+                        rotationDegrees = layer.rotationDegrees,
+                        enabled = layer.enabled
+                    )
+                    layer.kind == LayerKind.VIDEO && layer.sourceUri != null -> {
+                        val start = layer.timelineStartMs.coerceIn(0L, sourceDurationMs - 1L)
+                        val sourceEnd = layer.sourceOutMs.coerceAtMost(sourceDurationMs - start)
+                        if (sourceEnd <= layer.sourceInMs) null
+                        else layer.copy(
+                            timelineStartMs = start,
+                            sourceOutMs = sourceEnd,
+                            zIndex = layer.zIndex.coerceAtLeast(1)
+                        )
+                    }
+                    layer.kind == LayerKind.AUDIO && layer.sourceUri != null -> layer.copy(
+                        timelineStartMs = 0L,
+                        sourceInMs = 0L,
+                        sourceOutMs = sourceDurationMs.coerceAtLeast(1L)
+                    )
+                    else -> layer
+                }
+            }.toMutableList()
+            if (kept.none { it.id == "main-video" }) kept.add(0, mainLayer)
+            restored.copy(
+                durationMs = sourceDurationMs.coerceAtLeast(1L),
+                layers = kept.distinctBy { it.id }
+            )
+        }
+        if (backgroundAudioUri != null && timelineProject?.layers?.none { it.kind == LayerKind.AUDIO } == true) {
+            addAudioLayerToTimeline(backgroundAudioUri!!)
+        }
+        selectedTimelineLayerId = timelineProject?.layers?.firstOrNull()?.id
+        compositionPlayheadMs = 0L
+        refreshCompositionTimeline()
+        refreshLayerInspector()
+    }
+
+    private fun addAudioLayerToTimeline(uri: Uri) {
+        val project = timelineProject ?: return
+        val existing = project.layers.firstOrNull { it.kind == LayerKind.AUDIO }
+        val layer = EditLayer(
+            id = existing?.id ?: "audio-main",
+            name = queryDisplayName(uri),
+            kind = LayerKind.AUDIO,
+            sourceUri = uri.toString(),
+            timelineStartMs = 0L,
+            sourceInMs = 0L,
+            sourceOutMs = project.durationMs.coerceAtLeast(1L),
+            zIndex = 0
+        )
+        timelineProject = if (existing == null) TimelineEditorOps.addLayer(project, layer)
+        else project.replaceLayer(layer)
+        refreshCompositionTimeline()
+    }
+
+    private fun removeAudioLayerFromTimeline() {
+        val project = timelineProject ?: return
+        timelineProject = project.copy(layers = project.layers.filterNot { it.kind == LayerKind.AUDIO })
+        if (selectedTimelineLayerId == "audio-main") {
+            selectedTimelineLayerId = project.layers.firstOrNull { it.kind == LayerKind.VIDEO }?.id
+        }
+        refreshCompositionTimeline()
+        refreshLayerInspector()
+    }
+
+    private fun pickVideoLayer() {
+        if (sourceUri == null || durationMs <= 0L) {
+            toast("Import the main composition video first.")
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "video/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_ADD_VIDEO_LAYER)
+    }
+
+    private fun addVideoLayer(uri: Uri, flags: Int) {
+        val granted = flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+        if (granted != 0) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, granted)
+            } catch (_: Exception) { }
+        }
+        val name = queryDisplayName(uri)
+        status.text = "Reading layer media duration…"
+        status.setTextColor(accent)
+        Thread {
+            val duration = runCatching {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(this, uri)
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                        ?.toLongOrNull()?.takeIf { it > 0L }
+                        ?: error("The video provider did not report a duration.")
+                } finally {
+                    retriever.release()
+                }
+            }
+            handler.post {
+                duration.onSuccess { sourceDuration ->
+                    val project = timelineProject ?: run {
+                        toast("Import the main video first.")
+                        return@onSuccess
+                    }
+                    val start = compositionPlayheadMs.coerceIn(0L, (project.durationMs - 1L).coerceAtLeast(0L))
+                    val length = min(sourceDuration, (project.durationMs - start).coerceAtLeast(1L))
+                    val nextZ = (project.layers.filter { it.kind == LayerKind.VIDEO }.maxOfOrNull { it.zIndex } ?: 0) + 1
+                    val layer = EditLayer(
+                        id = "video-layer-${System.currentTimeMillis()}",
+                        name = name.substringBeforeLast('.').ifBlank { "Video layer" },
+                        kind = LayerKind.VIDEO,
+                        sourceUri = uri.toString(),
+                        timelineStartMs = start,
+                        sourceInMs = 0L,
+                        sourceOutMs = length.coerceAtLeast(1L),
+                        zIndex = nextZ
+                    )
+                    runCatching { TimelineEditorOps.addLayer(project, layer) }
+                        .onSuccess { updated ->
+                            timelineProject = updated
+                            selectedTimelineLayerId = layer.id
+                            refreshCompositionTimeline()
+                            refreshLayerInspector()
+                            refreshCompositionPreview()
+                            status.text = "Added V${nextZ + 1} · ${layer.name} · ${formatTime(length)}"
+                            status.setTextColor(green)
+                            toast("Video layer added to the composition.")
+                        }
+                        .onFailure { toast(it.message ?: "Could not add this video layer.") }
+                }.onFailure { error ->
+                    status.text = "Could not inspect layer media: ${error.message ?: "unknown error"}"
+                    status.setTextColor(accent)
+                }
+            }
+        }.start()
+    }
+
+    private fun createPreviewComposition(): Composition {
+        val source = sourceUri ?: error("No source video is loaded.")
+        val project = timelineProject ?: error("Composition timeline is not initialized.")
+        val mainLayer = project.layers.firstOrNull { it.id == "main-video" }
+            ?: error("The composition has no primary video layer.")
+
+        val mainMedia = MediaItem.fromUri(source)
+        val mainEdited = EditedMediaItem.Builder(mainMedia)
+            .setDurationUs(durationMs.coerceAtLeast(1L) * 1_000L)
+            .setEffects(
+                Effects(
+                    buildAudioProcessors(sourceAudioSettings.gain),
+                    buildVideoEffects() + SowzLayerTransformEffect(mainLayer)
+                )
+            )
+            .build()
+        val sequences = mutableListOf(
+            EditedMediaItemSequence.withAudioAndVideoFrom(listOf(mainEdited))
+        )
+
+        project.layers
+            .filter { it.kind == LayerKind.VIDEO && it.id != "main-video" && it.enabled && !it.sourceUri.isNullOrBlank() }
+            .sortedBy { it.zIndex }
+            .forEach { layer ->
+                val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
+                if (layer.timelineStartMs > 0L) builder.addGap(layer.timelineStartMs * 1_000L)
+                val media = MediaItem.Builder()
+                    .setUri(Uri.parse(layer.sourceUri))
+                    .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                            .setStartPositionMs(layer.sourceInMs)
+                            .setEndPositionMs(layer.sourceOutMs)
+                            .build()
+                    )
+                    .build()
+                val edited = EditedMediaItem.Builder(media)
+                    .setDurationUs(layer.durationMs * 1_000L)
+                    .setEffects(Effects(emptyList(), listOf(SowzLayerTransformEffect(layer))))
+                    .build()
+                sequences.add(builder.addItem(edited).build())
+            }
+
+        backgroundAudioUri?.let { audioUri ->
+            val audio = EditedMediaItem.Builder(MediaItem.fromUri(audioUri))
+                .setDurationUs(project.durationMs * 1_000L)
+                .setEffects(Effects(buildAudioProcessors(backgroundAudioSettings.gain), emptyList()))
+                .build()
+            val audioSequence = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO))
+                .addItem(audio)
+                .setIsLooping(true)
+                .build()
+            sequences.add(audioSequence)
+        }
+        return Composition.Builder(sequences).build()
+    }
+
+    private fun refreshCompositionPreview() {
+        if (!::playerView.isInitialized || sourceUri == null || durationMs <= 0L) return
+        val project = timelineProject
+        val needsCompositionPlayer = project?.layers?.any {
+            it.kind == LayerKind.VIDEO && it.id != "main-video" && it.enabled
+        } == true || backgroundAudioUri != null
+
+        if (!needsCompositionPlayer) {
+            if (compositionPlayer != null) {
+                val old = compositionPlayer
+                compositionPlayer = null
+                playerView.player = player
+                old?.release()
+            }
+            return
+        }
+
+        val position = (activePreviewPlayer()?.currentPosition ?: compositionPlayheadMs)
+            .coerceIn(0L, durationMs)
+        val wasPlaying = activePreviewPlayer()?.playWhenReady == true
+        val old = compositionPlayer
+        runCatching {
+            val next = CompositionPlayer.Builder(this).build()
+            next.setComposition(createPreviewComposition(), position)
+            compositionPlayer = next
+            playerView.player = next
+            next.prepare()
+            next.playWhenReady = wasPlaying
+            old?.release()
+        }.onFailure { error ->
+            compositionPlayer = null
+            playerView.player = player
+            old?.release()
+            status.text = "Layered preview unavailable: ${error.message ?: "unsupported composition"}"
+            status.setTextColor(accent)
+        }
+    }
+
+    private fun refreshPreviewEffects() {
+        player?.setVideoEffects(buildVideoEffects())
+        if (compositionPlayer != null) refreshCompositionPreview()
+    }
+
+    private fun refreshKeyframeSummary() {
+        if (!::keyframeSummary.isInitialized) return
+        val selected = timelineProject?.layers?.firstOrNull { it.id == selectedTimelineLayerId }
+        if (selected == null) {
+            keyframeSummary.text = "Select a layer to inspect keyframes."
+            return
+        }
+        val count = listOf(
+            selected.opacity, selected.positionX, selected.positionY,
+            selected.scaleX, selected.scaleY, selected.rotationDegrees
+        ).sumOf { it.keyframes.size }
+        val times = TimelineEditorOps.keyframeTimes(selected)
+        keyframeSummary.text = if (count == 0) {
+            "No keyframes · playhead ${formatTime(compositionPlayheadMs)}"
+        } else {
+            "$count keyframe(s) · " + times.joinToString("  ·  ") { formatTime(it) }
+        }
+    }
+
+    private fun refreshLayerInspector() {
+        val selected = timelineProject?.layers?.firstOrNull { it.id == selectedTimelineLayerId }
+        if (selected == null) {
+            if (::selectedLayerSummary.isInitialized) selectedLayerSummary.text = "Select a layer to edit its transform."
+            refreshKeyframeSummary()
+            return
+        }
+        selectedLayerSummary.text = "${selected.name} · ${selected.kind.name} · ${if (selected.enabled) "VISIBLE" else "HIDDEN"}"
+        val localTime = (compositionPlayheadMs - selected.timelineStartMs).coerceAtLeast(0L)
+        transformSeekBars.forEach { (property, seek) ->
+            val value = when (property) {
+                TransformProperty.OPACITY -> selected.opacity.valueAt(localTime)
+                TransformProperty.POSITION_X -> selected.positionX.valueAt(localTime)
+                TransformProperty.POSITION_Y -> selected.positionY.valueAt(localTime)
+                TransformProperty.SCALE_X -> selected.scaleX.valueAt(localTime)
+                TransformProperty.SCALE_Y -> selected.scaleY.valueAt(localTime)
+                TransformProperty.ROTATION -> selected.rotationDegrees.valueAt(localTime)
+            }
+            seek.progress = transformProgress(property, value)
+            seek.isEnabled = selected.kind != LayerKind.AUDIO
+        }
+        refreshKeyframeSummary()
+    }
+
+    private fun addTransformControl(
+        parent: LinearLayout,
+        property: TransformProperty,
+        title: String,
+        maxProgress: Int
+    ) {
+        add(parent, label(title), top = 9)
+        val seek = SeekBar(this).apply {
+            max = maxProgress
+            progress = transformProgress(property, defaultTransformValue(property))
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    updateSelectedLayerTransform(property, transformValue(property, progress))
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    refreshCompositionPreview()
+                    refreshKeyframeSummary()
+                }
+            })
+        }
+        transformSeekBars[property] = seek
+        add(parent, seek)
+    }
+
+    private fun defaultTransformValue(property: TransformProperty): Float = when (property) {
+        TransformProperty.OPACITY, TransformProperty.SCALE_X, TransformProperty.SCALE_Y -> 1f
+        TransformProperty.POSITION_X, TransformProperty.POSITION_Y, TransformProperty.ROTATION -> 0f
+    }
+
+    private fun transformValue(property: TransformProperty, progress: Int): Float = when (property) {
+        TransformProperty.OPACITY -> progress / 100f
+        TransformProperty.POSITION_X, TransformProperty.POSITION_Y -> (progress - 100) / 100f
+        TransformProperty.SCALE_X, TransformProperty.SCALE_Y -> 0.25f + (progress / 300f) * 2.75f
+        TransformProperty.ROTATION -> (progress - 180).toFloat()
+    }
+
+    private fun transformProgress(property: TransformProperty, value: Float): Int = when (property) {
+        TransformProperty.OPACITY -> (value.coerceIn(0f, 1f) * 100f).roundToInt()
+        TransformProperty.POSITION_X, TransformProperty.POSITION_Y ->
+            ((value.coerceIn(-1f, 1f) + 1f) * 100f).roundToInt()
+        TransformProperty.SCALE_X, TransformProperty.SCALE_Y ->
+            (((value.coerceIn(0.25f, 3f) - 0.25f) / 2.75f) * 300f).roundToInt()
+        TransformProperty.ROTATION -> (value.coerceIn(-180f, 180f) + 180f).roundToInt()
+    }
+
+    private fun updateSelectedLayerTransform(property: TransformProperty, value: Float) {
+        val id = selectedTimelineLayerId ?: return
+        val project = timelineProject ?: return
+        val layer = project.layers.firstOrNull { it.id == id } ?: return
+        if (layer.kind == LayerKind.AUDIO) return
+        val time = compositionPlayheadMs.coerceIn(layer.timelineStartMs, layer.timelineEndMs)
+        runCatching {
+            timelineProject = TimelineEditorOps.addKeyframe(project, id, property, time, value)
+            compositionTimelineView.project = timelineProject
+            selectedTimelineLayerId = id
+            refreshKeyframeSummary()
+        }.onFailure { toast(it.message ?: "Could not create the keyframe.") }
+    }
+
+    private fun addAllTransformKeyframes() {
+        val id = selectedTimelineLayerId ?: return
+        var updated = timelineProject ?: return
+        val layer = updated.layers.firstOrNull { it.id == id } ?: return
+        if (layer.kind == LayerKind.AUDIO) {
+            toast("Audio gain automation is not available in this transform panel yet.")
+            return
+        }
+        val time = compositionPlayheadMs.coerceIn(layer.timelineStartMs, layer.timelineEndMs)
+        TransformProperty.values().forEach { property ->
+            val value = TimelineEditorOps.propertyValueAt(updated, id, property, time)
+            updated = TimelineEditorOps.addKeyframe(updated, id, property, time, value)
+        }
+        timelineProject = updated
+        refreshCompositionTimeline()
+        refreshLayerInspector()
+        refreshCompositionPreview()
+        status.text = "Transform keyframes added at ${formatTime(time)}."
+        status.setTextColor(green)
+    }
+
+    private fun navigateSelectedKeyframe(forward: Boolean) {
+        val layer = timelineProject?.layers?.firstOrNull { it.id == selectedTimelineLayerId } ?: return
+        val times = TimelineEditorOps.keyframeTimes(layer)
+        val target = if (forward) times.firstOrNull { it > compositionPlayheadMs }
+        else times.lastOrNull { it < compositionPlayheadMs }
+        if (target == null) {
+            toast(if (forward) "There is no next keyframe." else "There is no previous keyframe.")
+            return
+        }
+        compositionPlayheadMs = target
+        activePreviewPlayer()?.seekTo(target)
+        if (durationMs > 0L) scrubber.progress = ((target.toDouble() / durationMs) * SCALE_MAX).toInt().coerceIn(0, SCALE_MAX)
+        if (::compositionTimelineView.isInitialized) compositionTimelineView.playheadMs = target
+        refreshLayerInspector()
+    }
+
     private fun pickProject() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
