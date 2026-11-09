@@ -411,7 +411,7 @@ class EditorActivity : Activity() {
                 chip.setTextColor(if (selected) Color.rgb(12, 18, 25) else muted)
             }
         }
-        listOf("MEDIA", "VIEWER", "TIMELINE", "AUDIO", "EFFECTS", "FFX", "EXPORT").forEach { name ->
+        listOf("MEDIA", "VIEWER", "TIMELINE", "ANIMATE", "AUDIO", "EFFECTS", "FFX", "EXPORT").forEach { name ->
             val chip = body(name, 9.5f, muted, true).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(11f), dp(8f), dp(11f), dp(8f))
@@ -545,8 +545,11 @@ class EditorActivity : Activity() {
                     val safePosition = positionMs.coerceIn(0L, durationMs)
                     scrubber.progress = ((safePosition.toDouble() / durationMs) * SCALE_MAX)
                         .toInt().coerceIn(0, SCALE_MAX)
-                    player?.seekTo(safePosition)
+                    activePreviewPlayer()?.seekTo(safePosition)
+                    compositionPlayheadMs = safePosition
                     timelineOverview.playheadMs = safePosition
+                    if (::compositionTimelineView.isInitialized) compositionTimelineView.playheadMs = safePosition
+                    refreshKeyframeSummary()
                 }
             }
             onTrimRangeChanged = { newInMs, newOutMs ->
@@ -560,6 +563,64 @@ class EditorActivity : Activity() {
             }
         }
         timelinePanel.addView(timelineOverview)
+
+        add(timelinePanel, label("COMPOSITION · MULTI-TRACK"), top = 12)
+        add(timelinePanel, body("Independent video layers can overlap. Drag a clip to change its start time; tap the ruler to move the playhead.", 11f, muted), top = 4)
+        val compositionScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            setPadding(0, dp(5f), 0, dp(5f))
+        }
+        compositionTimelineView = MultiTrackTimelineView(this).apply {
+            project = timelineProject
+            selectedLayerId = selectedTimelineLayerId
+            playheadMs = compositionPlayheadMs
+            onSeek = { position ->
+                compositionPlayheadMs = position
+                activePreviewPlayer()?.seekTo(position)
+                if (durationMs > 0L) {
+                    scrubber.progress = ((position.toDouble() / durationMs) * SCALE_MAX).toInt().coerceIn(0, SCALE_MAX)
+                    playbackTime.text = "${formatTime(position)} / ${formatTime(durationMs)}"
+                }
+                refreshKeyframeSummary()
+            }
+            onSelectLayer = { id ->
+                selectedTimelineLayerId = id
+                refreshLayerInspector()
+            }
+            onMoveLayer = { id, newStart ->
+                runCatching {
+                    timelineProject = TimelineEditorOps.moveLayer(
+                        timelineProject ?: error("No composition is loaded."),
+                        id,
+                        newStart
+                    )
+                    refreshCompositionTimeline()
+                    refreshLayerInspector()
+                    refreshCompositionPreview()
+                    status.text = "Layer moved · timeline and preview updated."
+                    status.setTextColor(green)
+                }.onFailure { toast(it.message ?: "Could not move this layer.") }
+            }
+            onSelectKeyframe = { id, time ->
+                selectedTimelineLayerId = id
+                compositionPlayheadMs = time
+                activePreviewPlayer()?.seekTo(time)
+                refreshLayerInspector()
+            }
+        }
+        compositionScroll.addView(compositionTimelineView)
+        timelinePanel.addView(compositionScroll, LinearLayout.LayoutParams(-1, -2))
+        val layerActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        layerActions.addView(button("＋ Video layer", secondary = true) { pickVideoLayer() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(5f) })
+        layerActions.addView(button("＋ Audio", secondary = true) { pickBackgroundAudio() },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(5f) })
+        add(timelinePanel, layerActions, top = 8)
+
         clipQueueControls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         add(timelinePanel, clipQueueControls, top = 8)
         val historyRow = LinearLayout(this).apply {
@@ -575,10 +636,36 @@ class EditorActivity : Activity() {
         refreshClipQueueSummary()
         add(content, timelinePanel, bottom = 13)
 
+        val animationPanel = panel()
+        sectionTargets["ANIMATE"] = animationPanel
+        add(animationPanel, label("ANIMATION · TRANSFORM KEYFRAMES"))
+        selectedLayerSummary = body("Select a layer to edit its transform.", 13f, white, true)
+        add(animationPanel, selectedLayerSummary, top = 8)
+        keyframeSummary = body("No keyframes on the selected layer.", 11f, muted)
+        add(animationPanel, keyframeSummary, top = 4)
+        addTransformControl(animationPanel, TransformProperty.OPACITY, "Opacity · 0–100%", 100)
+        addTransformControl(animationPanel, TransformProperty.POSITION_X, "Position X · -100% to +100%", 200)
+        addTransformControl(animationPanel, TransformProperty.POSITION_Y, "Position Y · -100% to +100%", 200)
+        addTransformControl(animationPanel, TransformProperty.SCALE_X, "Scale X · 25% to 300%", 300)
+        addTransformControl(animationPanel, TransformProperty.SCALE_Y, "Scale Y · 25% to 300%", 300)
+        addTransformControl(animationPanel, TransformProperty.ROTATION, "Rotation · -180° to +180°", 360)
+        val keyframeActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        keyframeActions.addView(button("◀ Keyframe", secondary = true) { navigateSelectedKeyframe(false) },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(5f) })
+        keyframeActions.addView(button("Keyframe ▶", secondary = true) { navigateSelectedKeyframe(true) },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(5f) })
+        add(animationPanel, keyframeActions, top = 8)
+        add(animationPanel, button("＋ Add keyframes for all transforms") { addAllTransformKeyframes() }, top = 8)
+        add(animationPanel, body("Sliders add or update a keyframe at the playhead. Values interpolate over time and are shared by preview and export.", 11f, muted), top = 8)
+        add(content, animationPanel, bottom = 13)
+
         val audioPanel = panel()
         sectionTargets["AUDIO"] = audioPanel
         add(audioPanel, label("Background audio · separate track"))
-        add(audioPanel, body("Balance the original clip sound against the added music. These mix controls affect MP4 export; the live viewer still previews the source clip without the extra track.", 12f, muted), top = 5)
+        add(audioPanel, body("Balance the original clip sound against the added music. The CompositionPlayer previews the same audio layer used by MP4 export.", 12f, muted), top = 5)
         add(audioPanel, label("Original video audio"), top = 10)
         sourceAudioGainSeek = SeekBar(this).apply {
             max = 100
