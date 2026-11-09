@@ -64,6 +64,10 @@ import com.sowz.aestudio.core.ClipTrimRange
 import com.sowz.aestudio.core.ClipQueueSnapshot
 import com.sowz.aestudio.core.EditHistory
 import com.sowz.aestudio.core.AudioTrackSettings
+import com.sowz.aestudio.core.AepNativeReader
+import com.sowz.aestudio.core.AepProjectImporter
+import com.sowz.aestudio.core.NativeEffectMapper
+import com.sowz.aestudio.core.NativeEffectStack
 import com.sowz.aestudio.core.ColorGradeSettings
 import com.sowz.aestudio.core.FfxEffect
 import com.sowz.aestudio.core.FfxParser
@@ -90,6 +94,7 @@ class EditorActivity : Activity() {
         const val REQUEST_IMPORT_LUT = 2106
         const val REQUEST_IMPORT_FFX = 2107
         const val REQUEST_IMPORT_AUDIO = 2108
+        const val REQUEST_IMPORT_AEP = 2109
         const val SCALE_MAX = 1000
         const val MIN_CLIP_MS = 500L
     }
@@ -117,6 +122,10 @@ class EditorActivity : Activity() {
     private var contrastValue = 0f
     private var colorGrade = ColorGradeSettings()
     private var blurSigma = 0f
+    private var shakeEnabled = false
+    private var shakeAmplitudePixels = 8f
+    private var shakeFrequencyHz = 8f
+    private var shakeRotationDegrees = 1.5f
     private var mainClipSpeed = 1f
     private var rotationDegrees = 0
     private var overlayText = ""
@@ -150,6 +159,11 @@ class EditorActivity : Activity() {
     private lateinit var saturationSeek: SeekBar
     private lateinit var lightnessSeek: SeekBar
     private lateinit var blurSeek: SeekBar
+    private lateinit var shakeToggle: TextView
+    private lateinit var shakeAmplitudeSeek: SeekBar
+    private lateinit var shakeFrequencySeek: SeekBar
+    private lateinit var shakeRotationSeek: SeekBar
+    private lateinit var shakeSummary: TextView
     private lateinit var mainSpeedSeek: SeekBar
     private lateinit var speedSummary: TextView
     private lateinit var effectSummary: TextView
@@ -407,6 +421,7 @@ class EditorActivity : Activity() {
         add(sourcePanel, body("Local video files stay on this device. Select a clip to start.", 12f, muted), top = 5)
         add(sourcePanel, button("＋  Import video", secondary = false) { pickVideo() }, top = 13)
         add(sourcePanel, button("Open saved project (.sowzproj)", secondary = true) { pickProject() }, top = 8)
+        add(sourcePanel, button("Import After Effects project (.aep)", secondary = true) { pickAepProject() }, top = 8)
         add(content, sourcePanel, bottom = 13)
 
         val previewPanel = panel()
@@ -673,7 +688,68 @@ class EditorActivity : Activity() {
             })
         }
         add(effectsPanel, blurSeek)
-        add(effectsPanel, label("Main clip speed · 0.25x to 4x"), top = 7)
+
+        add(effectsPanel, label("SOWZ Camera Shake · original native effect"), top = 12)
+        shakeToggle = button("SOWZ SHAKE · OFF", secondary = true) {
+            shakeEnabled = !shakeEnabled
+            refreshShakeControls()
+            player?.setVideoEffects(buildVideoEffects())
+        }
+        add(effectsPanel, shakeToggle, top = 7)
+        add(effectsPanel, label("Amplitude · 0–32 px"), top = 7)
+        shakeAmplitudeSeek = SeekBar(this).apply {
+            max = 32
+            progress = shakeAmplitudePixels.toInt()
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    shakeAmplitudePixels = progress.toFloat()
+                    refreshShakeControls()
+                    player?.setVideoEffects(buildVideoEffects())
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, shakeAmplitudeSeek)
+        add(effectsPanel, label("Frequency · 0.25–30 Hz"), top = 7)
+        shakeFrequencySeek = SeekBar(this).apply {
+            max = 120
+            progress = ((shakeFrequencyHz - 0.25f) / 29.75f * max).toInt().coerceIn(0, max)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    shakeFrequencyHz = 0.25f + (progress / 120f) * 29.75f
+                    refreshShakeControls()
+                    player?.setVideoEffects(buildVideoEffects())
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, shakeFrequencySeek)
+        add(effectsPanel, label("Rotation · 0–15°"), top = 7)
+        shakeRotationSeek = SeekBar(this).apply {
+            max = 150
+            progress = (shakeRotationDegrees * 10f).toInt().coerceIn(0, max)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    shakeRotationDegrees = progress / 10f
+                    refreshShakeControls()
+                    player?.setVideoEffects(buildVideoEffects())
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        add(effectsPanel, shakeRotationSeek)
+        shakeSummary = body("OFF · deterministic motion", 11f, muted, true)
+        add(effectsPanel, shakeSummary, top = 4)
+        refreshShakeControls()
+        add(effectsPanel, button("SOWZ FX Browser / Web Search", secondary = true) { openEffectBrowser() }, top = 10)
+
+        add(effectsPanel, label("Main clip speed · 0.25x to 4x"), top = 12)
         mainSpeedSeek = SeekBar(this).apply {
             max = 100
             progress = 20
@@ -691,6 +767,14 @@ class EditorActivity : Activity() {
         effectSummary = body("Brightness 0.00 · Contrast 0.00\nHue 0° · Saturation 0 · Lightness 0\nBlur 0", 12f, accent, true)
         add(effectsPanel, effectSummary, top = 7)
         add(effectsPanel, button("Reset color controls", secondary = true) {
+            shakeEnabled = false
+            shakeAmplitudePixels = 8f
+            shakeFrequencyHz = 8f
+            shakeRotationDegrees = 1.5f
+            shakeAmplitudeSeek.progress = 8
+            shakeFrequencySeek.progress = 31
+            shakeRotationSeek.progress = 15
+            refreshShakeControls()
             brightnessSeek.progress = 100
             contrastSeek.progress = 100
             hueSeek.progress = 180
@@ -801,10 +885,17 @@ class EditorActivity : Activity() {
         additionalClipTrims.clear()
         additionalClipSpeeds.clear()
         blurSigma = 0f
-        mainClipSpeed = 1f
+        shakeEnabled = false
+        shakeAmplitudePixels = 8f
+        shakeFrequencyHz = 8f
+        shakeRotationDegrees = 1.5f
         resetQueueHistory()
         refreshClipQueueSummary()
         if (::blurSeek.isInitialized) blurSeek.progress = 0
+        if (::shakeAmplitudeSeek.isInitialized) shakeAmplitudeSeek.progress = 8
+        if (::shakeFrequencySeek.isInitialized) shakeFrequencySeek.progress = 31
+        if (::shakeRotationSeek.isInitialized) shakeRotationSeek.progress = 15
+        if (::shakeToggle.isInitialized) refreshShakeControls()
         if (::mainSpeedSeek.isInitialized) mainSpeedSeek.progress = 20
         if (::speedSummary.isInitialized) {
             speedSummary.text = "Main clip speed · 1x"
@@ -1210,6 +1301,7 @@ class EditorActivity : Activity() {
             REQUEST_IMPORT_LUT -> loadCubeLut(data?.data ?: return, data.flags)
             REQUEST_IMPORT_FFX -> loadFfxPreset(data?.data ?: return, data.flags)
             REQUEST_IMPORT_AUDIO -> loadBackgroundAudio(data?.data ?: return, data.flags)
+            REQUEST_IMPORT_AEP -> loadAepProject(data?.data ?: return, data.flags)
         }
     }
 
@@ -1287,6 +1379,81 @@ class EditorActivity : Activity() {
         startActivityForResult(intent, REQUEST_OPEN_PROJECT)
     }
 
+    private fun pickAepProject() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_IMPORT_AEP)
+    }
+
+    private fun loadAepProject(uri: Uri, flags: Int) {
+        val name = queryDisplayName(uri)
+        if (!name.endsWith(".aep", ignoreCase = true)) {
+            status.text = "This reader currently expects a binary .aep file. AEPX XML import is not enabled."
+            status.setTextColor(accent)
+            toast("Choose a binary .aep project.")
+            return
+        }
+        try {
+            if ((flags and Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0) {
+                contentResolver.takePersistableUriPermission(
+                    uri, flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+        } catch (_: Exception) {
+            // Some document providers only issue temporary grants.
+        }
+        status.text = "Reading After Effects project: $name…"
+        status.setTextColor(accent)
+        Thread {
+            val result = runCatching {
+                val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        require(total <= 96 * 1024 * 1024) {
+                            "AEP exceeds the 96 MiB on-device parser limit."
+                        }
+                        output.write(buffer, 0, count)
+                    }
+                    output.toByteArray()
+                } ?: error("Could not read the selected AEP file.")
+                AepProjectImporter.parse(AepNativeReader().inspectAep(bytes))
+            }
+            handler.post {
+                result.onSuccess { summary ->
+                    val mapped = NativeEffectMapper.map(summary.effects)
+                    AlertDialog.Builder(this)
+                        .setTitle("AEP analysis · $name")
+                        .setMessage(
+                            summary.reportText() + "\n\nSOWZ-compatible static effects: " +
+                                if (mapped.hasSupportedValues) mapped.appliedEffects.joinToString(", ")
+                                else "none found"
+                        )
+                        .setPositiveButton(
+                            if (mapped.hasSupportedValues) "Apply compatible effects" else "Close"
+                        ) { _, _ ->
+                            if (mapped.hasSupportedValues) applyNativeEffectStack(mapped, name)
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                    status.text = "AEP scanned · ${summary.compositionCount} comps · ${summary.layerCount} layers · ${summary.effects.size} effects"
+                    status.setTextColor(green)
+                }.onFailure { error ->
+                    status.text = "Could not read AEP: ${error.message ?: "unknown parser error"}"
+                    status.setTextColor(accent)
+                    toast("AEP import failed. The file may use an unsupported or damaged structure.")
+                }
+            }
+        }.start()
+    }
+
     private fun startProjectSavePicker() {
         if (sourceUri == null || durationMs <= 0L || clipEndMs <= clipStartMs) {
             toast("Import a video and choose a valid trim range before saving a project.")
@@ -1337,6 +1504,10 @@ class EditorActivity : Activity() {
                 })
                 .put("mainClipSpeed", mainClipSpeed.toDouble())
                 .put("blurSigma", blurSigma.toDouble())
+                .put("shakeEnabled", shakeEnabled)
+                .put("shakeAmplitudePixels", shakeAmplitudePixels.toDouble())
+                .put("shakeFrequencyHz", shakeFrequencyHz.toDouble())
+                .put("shakeRotationDegrees", shakeRotationDegrees.toDouble())
                 .put("frameRate", 30)
                 .put("createdWith", "SOWZ AE Studio 1.3.0")
                 .toString(2)
@@ -1406,6 +1577,13 @@ class EditorActivity : Activity() {
             val savedLightness = document.optDouble("lightnessAdjustment", 0.0).toFloat()
             val savedMainSpeed = document.optDouble("mainClipSpeed", 1.0).toFloat()
             val savedBlurSigma = document.optDouble("blurSigma", 0.0).toFloat()
+            shakeEnabled = document.optBoolean("shakeEnabled", false)
+            val savedShakeAmplitude = document.optDouble("shakeAmplitudePixels", 8.0).toFloat()
+            val savedShakeFrequency = document.optDouble("shakeFrequencyHz", 8.0).toFloat()
+            val savedShakeRotation = document.optDouble("shakeRotationDegrees", 1.5).toFloat()
+            shakeAmplitudePixels = if (savedShakeAmplitude.isFinite()) savedShakeAmplitude.coerceIn(0f, 32f) else 8f
+            shakeFrequencyHz = if (savedShakeFrequency.isFinite()) savedShakeFrequency.coerceIn(0.25f, 30f) else 8f
+            shakeRotationDegrees = if (savedShakeRotation.isFinite()) savedShakeRotation.coerceIn(0f, 15f) else 1.5f
             mainClipSpeed = if (savedMainSpeed.isFinite()) savedMainSpeed.coerceIn(0.25f, 4f) else 1f
             blurSigma = if (savedBlurSigma.isFinite()) savedBlurSigma.coerceIn(0f, 40f) else 0f
             colorGrade = ColorGradeSettings(
@@ -1442,6 +1620,10 @@ class EditorActivity : Activity() {
             saturationSeek.progress = (colorGrade.saturationAdjustment + 100f).toInt().coerceIn(0, 200)
             lightnessSeek.progress = (colorGrade.lightnessAdjustment + 100f).toInt().coerceIn(0, 200)
             blurSeek.progress = kotlin.math.round((blurSigma / 40f) * 100f).toInt().coerceIn(0, 100)
+            shakeAmplitudeSeek.progress = shakeAmplitudePixels.toInt().coerceIn(0, 32)
+            shakeFrequencySeek.progress = (((shakeFrequencyHz - 0.25f) / 29.75f) * 120f).toInt().coerceIn(0, 120)
+            shakeRotationSeek.progress = (shakeRotationDegrees * 10f).toInt().coerceIn(0, 150)
+            refreshShakeControls()
             mainSpeedSeek.progress = kotlin.math.round(((mainClipSpeed - 0.25f) / 3.75f) * 100f).toInt().coerceIn(0, 100)
             updateColorValues()
             updateMainSpeedFromSeek()
@@ -1574,6 +1756,74 @@ class EditorActivity : Activity() {
         player?.setVideoEffects(buildVideoEffects())
     }
 
+    private fun refreshShakeControls() {
+        if (!::shakeToggle.isInitialized) return
+        shakeToggle.text = if (shakeEnabled) "SOWZ SHAKE · ON" else "SOWZ SHAKE · OFF"
+        shakeSummary.text = (if (shakeEnabled) "ON" else "OFF") +
+            " · ${shakeAmplitudePixels.toInt()} px · ${String.format(Locale.ROOT, "%.1f", shakeFrequencyHz)} Hz · ${String.format(Locale.ROOT, "%.1f", shakeRotationDegrees)}°"
+        shakeSummary.setTextColor(if (shakeEnabled) accent else muted)
+    }
+
+    private fun applyNativeEffectStack(stack: NativeEffectStack, sourceName: String) {
+        stack.brightness?.let { brightnessValue = it }
+        stack.contrast?.let { contrastValue = it }
+        stack.hueDegrees?.let { colorGrade = colorGrade.copy(hueAdjustmentDegrees = it) }
+        stack.saturation?.let { colorGrade = colorGrade.copy(saturationAdjustment = it) }
+        stack.lightness?.let { colorGrade = colorGrade.copy(lightnessAdjustment = it) }
+        stack.blurSigma?.let { blurSigma = it }
+        if (::brightnessSeek.isInitialized) brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
+        if (::contrastSeek.isInitialized) contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
+        if (::hueSeek.isInitialized) hueSeek.progress = (colorGrade.hueAdjustmentDegrees + 180f).toInt().coerceIn(0, 360)
+        if (::saturationSeek.isInitialized) saturationSeek.progress = (colorGrade.saturationAdjustment + 100f).toInt().coerceIn(0, 200)
+        if (::lightnessSeek.isInitialized) lightnessSeek.progress = (colorGrade.lightnessAdjustment + 100f).toInt().coerceIn(0, 200)
+        if (::blurSeek.isInitialized) blurSeek.progress = (blurSigma / 40f * 100f).toInt().coerceIn(0, 100)
+        if (::effectSummary.isInitialized) updateColorValues()
+        player?.setVideoEffects(buildVideoEffects())
+
+        val applied = stack.appliedEffects.joinToString(", ").ifBlank { "none" }
+        val skipped = stack.skippedEffects.take(8).joinToString(", ").ifBlank { "none" }
+        status.text = "$sourceName · applied: $applied · unsupported/animated: $skipped"
+        status.setTextColor(if (stack.hasSupportedValues) green else accent)
+        if (::ffxPresetSummary.isInitialized) {
+            ffxPresetSummary.text = "$sourceName · ${if (stack.hasSupportedValues) "compatible effects applied" else "stored / scanned only"}"
+        }
+        toast(if (stack.hasSupportedValues) "Compatible native effects applied." else "File read; no supported static effects found.")
+    }
+
+    private fun openEffectBrowser() {
+        val query = EditText(this).apply {
+            setSingleLine(true)
+            setText("Sapphire S_Shake official documentation and download")
+            setSelection(text.length)
+            hint = "Search effects and plug-ins"
+            setTextColor(white)
+            setHintTextColor(muted)
+        }
+        val info = body(
+            "SOWZ Camera Shake is a native Android effect. Desktop .aex plug-ins are not Android libraries. Use the official publisher for commercial desktop plug-ins.",
+            12f, muted
+        )
+        val content = panel()
+        add(content, info)
+        add(content, query, top = 10)
+        AlertDialog.Builder(this)
+            .setTitle("SOWZ FX Browser")
+            .setView(content)
+            .setPositiveButton("Search Web") { _, _ ->
+                val search = Uri.encode(query.text.toString().trim())
+                runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$search")))
+                }.onFailure { toast("No browser is available to open web search.") }
+            }
+            .setNeutralButton("Official Sapphire downloads") { _, _ ->
+                runCatching {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://borisfx.com/downloads/?product=sapphire&os=windows%2bmac%2blinux")))
+                }.onFailure { toast("Could not open the official publisher page.") }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
     private fun buildEffectSummary(): String = buildString {
         append("Brightness ").append(String.format(Locale.ROOT, "%.2f", brightnessValue))
         append(" · Contrast ").append(String.format(Locale.ROOT, "%.2f", contrastValue))
@@ -1581,6 +1831,7 @@ class EditorActivity : Activity() {
         append(" · Saturation ").append(colorGrade.saturationAdjustment.toInt())
         append(" · Lightness ").append(colorGrade.lightnessAdjustment.toInt())
         append("\nBlur ").append(if (blurSigma < 0.01f) "0" else String.format(Locale.ROOT, "%.1f", blurSigma))
+        append("\nSOWZ Shake ").append(if (shakeEnabled) "ON" else "OFF")
     }
 
     private fun updateMainSpeedFromSeek() {
@@ -1644,6 +1895,16 @@ class EditorActivity : Activity() {
             )
         }
         if (blurSigma > 0.01f) effects.add(GaussianBlur(blurSigma))
+        if (shakeEnabled && (shakeAmplitudePixels > 0.01f || shakeRotationDegrees > 0.01f)) {
+            effects.add(
+                SowzShakeEffect(
+                    amplitudePixels = shakeAmplitudePixels,
+                    frequencyHz = shakeFrequencyHz,
+                    rotationDegrees = shakeRotationDegrees,
+                    seed = 1
+                )
+            )
+        }
         if (rotationDegrees != 0) {
             effects.add(ScaleAndRotateTransformation.Builder().setRotationDegrees(rotationDegrees.toFloat()).build())
         }
@@ -1850,7 +2111,7 @@ class EditorActivity : Activity() {
             ffxPresetSummary.setTextColor(white)
         }
         if (effects.isEmpty()) {
-            status.text = "Preset saved, but no supported effect blocks could be decoded."
+            status.text = "Preset saved, but no effect blocks could be decoded."
             status.setTextColor(accent)
             if (::ffxPresetSummary.isInitialized) {
                 ffxPresetSummary.text = "$name · stored, no values applied"
@@ -1858,52 +2119,7 @@ class EditorActivity : Activity() {
             toast("FFX stored. No editable effect values were found.")
             return
         }
-
-        val supported = effects.firstOrNull { effect ->
-            effect.matchName.contains("Brightness & Contrast", ignoreCase = true) ||
-                effect.displayName.contains("Brightness & Contrast", ignoreCase = true)
-        }
-        var didApply = false
-        var appliedName = ""
-        if (supported != null) {
-            val brightness = supported.parameters.firstOrNull { it.name.equals("Brightness", ignoreCase = true) }
-            val contrast = supported.parameters.firstOrNull { it.name.equals("Contrast", ignoreCase = true) }
-            val canApplyBrightness = brightness?.value != null && !brightness.isAnimated
-            val canApplyContrast = contrast?.value != null && !contrast.isAnimated
-            if (canApplyBrightness || canApplyContrast) {
-                if (canApplyBrightness) {
-                    brightnessValue = ((brightness!!.value!!.toFloat()) / 100f).coerceIn(-1f, 1f)
-                    brightnessSeek.progress = ((brightnessValue + 1f) * 100f).toInt().coerceIn(0, 200)
-                }
-                if (canApplyContrast) {
-                    contrastValue = ((contrast!!.value!!.toFloat()) / 100f).coerceIn(-1f, 1f)
-                    contrastSeek.progress = ((contrastValue + 1f) * 100f).toInt().coerceIn(0, 200)
-                }
-                updateColorValues()
-                didApply = true
-                appliedName = supported.displayName
-            }
-        }
-
-        val skipped = effects.filterNot { it === supported }
-        val skippedNames = skipped.map { it.displayName }.distinct().take(4)
-        status.text = if (didApply) {
-            buildString {
-                append("Applied to the current clip: ").append(appliedName)
-                append(". Found ").append(effects.size).append(" effect(s).")
-                if (skipped.isNotEmpty()) append(" Not applied: ").append(skippedNames.joinToString(", "))
-                if (supported?.parameters?.any { it.isAnimated } == true) append(". Animated values were not reproduced.")
-                append(" Review the preview before export.")
-            }
-        } else {
-            "Preset saved, but no supported static Brightness & Contrast values were found. Detected: " +
-                effects.map { it.displayName }.distinct().take(5).joinToString(", ")
-        }
-        status.setTextColor(if (didApply) green else accent)
-        if (::ffxPresetSummary.isInitialized) {
-            ffxPresetSummary.text = if (didApply) "$name · $appliedName applied" else "$name · stored, not applied"
-        }
-        toast(if (didApply) "Supported FFX values applied to the current clip." else "Preset stored; no compatible values were applied.")
+        applyNativeEffectStack(NativeEffectMapper.fromFfx(effects), name)
     }
 
     private fun formatFileSize(size: Long): String =
