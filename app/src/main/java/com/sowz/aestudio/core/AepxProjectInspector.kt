@@ -1,8 +1,13 @@
 package com.sowz.aestudio.core
 
-import org.xmlpull.v1.XmlPullParser
-import org.xmlpull.v1.XmlPullParserFactory
+import org.xml.sax.Attributes
+import org.xml.sax.EntityResolver
+import org.xml.sax.SAXException
+import org.xml.sax.SAXParseException
+import org.xml.sax.helpers.DefaultHandler
 import java.io.ByteArrayInputStream
+import org.xml.sax.InputSource
+import javax.xml.parsers.SAXParserFactory
 
 data class AepxProjectSummary(
     val rootElement: String,
@@ -45,6 +50,70 @@ object AepxProjectInspector {
     private const val MAX_DEPTH = 96
     private const val MAX_EFFECT_LABELS = 2_000
 
+    private class ScanHandler : DefaultHandler() {
+        var elements = 0
+            private set
+        var compositions = 0
+            private set
+        var layers = 0
+            private set
+        var footage = 0
+            private set
+        var binaryBlocks = 0
+            private set
+        var depth = 0
+            private set
+        var root = ""
+            private set
+        val effects = linkedSetOf<String>()
+
+        override fun startElement(uri: String?, localName: String?, qName: String?, attributes: Attributes) {
+            depth++
+            require(depth <= MAX_DEPTH) { "AEPX nesting exceeds the 96-level safety limit." }
+            elements++
+            require(elements <= MAX_ELEMENTS) { "AEPX contains too many XML elements." }
+
+            val tag = qName.orEmpty().ifBlank { localName.orEmpty() }
+            if (root.isBlank()) root = tag
+            val normalized = tag.lowercase()
+            when {
+                normalized == "composition" || normalized == "compitem" || normalized == "comp" ->
+                    compositions++
+                normalized.contains("layer") || normalized == "layr" ->
+                    layers++
+                normalized.contains("footage") || normalized == "footageitem" ->
+                    footage++
+                normalized == "bdata" || normalized == "binarydata" ->
+                    binaryBlocks++
+            }
+
+            if ((normalized.contains("effect") || normalized.contains("plugin")) &&
+                effects.size < MAX_EFFECT_LABELS
+            ) {
+                val label = sequenceOf(
+                    attributes.getValue("name"),
+                    attributes.getValue("matchName"),
+                    attributes.getValue("matchname"),
+                    attributes.getValue("id"),
+                    tag
+                ).firstOrNull { !it.isNullOrBlank() } ?: tag
+                effects.add(label.take(180))
+            }
+        }
+
+        override fun endElement(uri: String?, localName: String?, qName: String?) {
+            depth = (depth - 1).coerceAtLeast(0)
+        }
+
+        override fun error(exception: SAXParseException) {
+            throw exception
+        }
+
+        override fun fatalError(exception: SAXParseException) {
+            throw exception
+        }
+    }
+
     fun inspect(bytes: ByteArray): AepxProjectSummary {
         require(bytes.isNotEmpty()) { "The selected AEPX file is empty." }
         require(bytes.size <= MAX_INPUT_BYTES) { "AEPX exceeds the 96 MiB safety limit." }
@@ -56,72 +125,30 @@ object AepxProjectInspector {
             "The selected file does not look like an After Effects XML project."
         }
 
-        val factory = XmlPullParserFactory.newInstance()
-        factory.isNamespaceAware = false
-        factory.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false)
-        val parser = factory.newPullParser()
-        parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false)
-        parser.setInput(ByteArrayInputStream(bytes), "UTF-8")
-
-        var elements = 0
-        var compositions = 0
-        var layers = 0
-        var footage = 0
-        var binaryBlocks = 0
-        var depth = 0
-        var root = ""
-        val effects = linkedSetOf<String>()
-
-        while (true) {
-            when (parser.next()) {
-                XmlPullParser.START_TAG -> {
-                    depth++
-                    require(depth <= MAX_DEPTH) { "AEPX nesting exceeds the 96-level safety limit." }
-                    elements++
-                    require(elements <= MAX_ELEMENTS) { "AEPX contains too many XML elements." }
-
-                    val tag = parser.name.orEmpty()
-                    if (root.isBlank()) root = tag
-                    val normalized = tag.lowercase()
-                    when {
-                        normalized == "composition" || normalized == "compitem" || normalized == "comp" ->
-                            compositions++
-                        normalized.contains("layer") || normalized == "layr" ->
-                            layers++
-                        normalized.contains("footage") || normalized == "footageitem" ->
-                            footage++
-                        normalized == "bdata" || normalized == "binarydata" ->
-                            binaryBlocks++
-                    }
-
-                    if (normalized.contains("effect") || normalized.contains("plugin")) {
-                        if (effects.size < MAX_EFFECT_LABELS) {
-                            val label = sequenceOf(
-                                parser.getAttributeValue(null, "name"),
-                                parser.getAttributeValue(null, "matchName"),
-                                parser.getAttributeValue(null, "matchname"),
-                                parser.getAttributeValue(null, "id"),
-                                tag
-                            ).firstOrNull { !it.isNullOrBlank() } ?: tag
-                            effects.add(label.take(180))
-                        }
-                    }
-                }
-                XmlPullParser.END_TAG -> depth = (depth - 1).coerceAtLeast(0)
-                XmlPullParser.DOCDECL -> error("AEPX document types are disabled for safety.")
-                XmlPullParser.END_DOCUMENT -> break
-            }
+        val factory = SAXParserFactory.newInstance().apply {
+            isNamespaceAware = false
+            isXIncludeAware = false
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setFeature("http://xml.org/sax/features/external-general-entities", false)
+            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+            setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
         }
+        val handler = ScanHandler()
+        val reader = factory.newSAXParser().xmlReader
+        reader.entityResolver = EntityResolver { _, _ -> InputSource(ByteArrayInputStream(ByteArray(0))) }
+        reader.contentHandler = handler
+        reader.errorHandler = handler
+        reader.parse(InputSource(ByteArrayInputStream(bytes)))
 
-        require(elements > 0) { "No XML elements were found in the AEPX file." }
+        require(handler.elements > 0) { "No XML elements were found in the AEPX file." }
         return AepxProjectSummary(
-            rootElement = root,
-            elementCount = elements,
-            compositionCount = compositions,
-            layerCount = layers,
-            footageCount = footage,
-            effectElements = effects.toList(),
-            binaryDataBlocks = binaryBlocks,
+            rootElement = handler.root,
+            elementCount = handler.elements,
+            compositionCount = handler.compositions,
+            layerCount = handler.layers,
+            footageCount = handler.footage,
+            effectElements = handler.effects.toList(),
+            binaryDataBlocks = handler.binaryBlocks,
             notes = listOf(
                 "Only XML element structure and effect-like labels are inspected; embedded binary payloads remain opaque.",
                 "This scan cannot claim exact After Effects compatibility or create a rendered composition."
