@@ -148,7 +148,7 @@ class MainActivity : Activity() {
                 Tab.SETTINGS -> "App preferences"
             }, 12f, muted))
         }, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(text(if (working) "SAVING" else "1.6", 10f, if (working) green else muted, true).apply {
+        header.addView(text(if (working) "SAVING" else "1.7", 10f, if (working) green else muted, true).apply {
             gravity = Gravity.CENTER
             setPadding(d(10f), d(8f), d(10f), d(8f))
             background = rounded(surface2, 12f, border)
