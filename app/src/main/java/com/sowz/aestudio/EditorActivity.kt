@@ -86,6 +86,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Native video editing foundation: sequential clips, trim, text/color effects, transforms, saved projects and MP4 export.
@@ -112,7 +113,9 @@ class EditorActivity : Activity() {
     private var player: ExoPlayer? = null
     private var compositionPlayer: CompositionPlayer? = null
     private var timelineProject: TimelineProject? = null
+    private var pendingTimelineProject: TimelineProject? = null
     private var selectedTimelineLayerId: String? = null
+    private var compositionPlayheadMs = 0L
     private var transformer: Transformer? = null
     private var sourceUri: Uri? = null
     private var backgroundAudioUri: Uri? = null
@@ -270,6 +273,7 @@ class EditorActivity : Activity() {
 
     override fun onPause() {
         handler.removeCallbacks(syncPlayback)
+        activePreviewPlayer()?.pause()
         super.onPause()
     }
 
@@ -479,7 +483,7 @@ class EditorActivity : Activity() {
                 }
 
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                    if (durationMs > 0) player?.seekTo(durationMs * scrubber.progress / SCALE_MAX)
+                    if (durationMs > 0) activePreviewPlayer()?.seekTo(durationMs * scrubber.progress / SCALE_MAX)
                     draggingScrubber = false
                     refreshTimelineOverview()
                 }
@@ -705,8 +709,10 @@ class EditorActivity : Activity() {
         add(audioPanel, backgroundAudioGainSummary, top = 4)
         add(audioPanel, button("Remove background audio", secondary = true) {
             backgroundAudioUri = null
+            removeAudioLayerFromTimeline()
             refreshBackgroundAudioControls()
-            status.text = "Background audio removed from the project."
+            refreshCompositionPreview()
+            status.text = "Background audio removed from the composition."
             status.setTextColor(muted)
         }, top = 8)
         refreshSourceAudioControls()
@@ -790,7 +796,7 @@ class EditorActivity : Activity() {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (!fromUser) return
                     blurSigma = if (progress < 2) 0f else (progress / 100f) * 40f
-                    player?.setVideoEffects(buildVideoEffects())
+                    refreshPreviewEffects()
                     effectSummary.text = buildEffectSummary()
                 }
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
@@ -803,7 +809,7 @@ class EditorActivity : Activity() {
         shakeToggle = button("SOWZ SHAKE · OFF", secondary = true) {
             shakeEnabled = !shakeEnabled
             refreshShakeControls()
-            player?.setVideoEffects(buildVideoEffects())
+            refreshPreviewEffects()
         }
         add(effectsPanel, shakeToggle, top = 7)
         add(effectsPanel, label("Amplitude · 0–32 px"), top = 7)
@@ -815,7 +821,7 @@ class EditorActivity : Activity() {
                     if (!fromUser) return
                     shakeAmplitudePixels = progress.toFloat()
                     refreshShakeControls()
-                    player?.setVideoEffects(buildVideoEffects())
+                    refreshPreviewEffects()
                 }
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
                 override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
@@ -831,7 +837,7 @@ class EditorActivity : Activity() {
                     if (!fromUser) return
                     shakeFrequencyHz = 0.25f + (progress / 120f) * 29.75f
                     refreshShakeControls()
-                    player?.setVideoEffects(buildVideoEffects())
+                    refreshPreviewEffects()
                 }
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
                 override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
@@ -847,7 +853,7 @@ class EditorActivity : Activity() {
                     if (!fromUser) return
                     shakeRotationDegrees = progress / 10f
                     refreshShakeControls()
-                    player?.setVideoEffects(buildVideoEffects())
+                    refreshPreviewEffects()
                 }
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
                 override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
@@ -894,7 +900,7 @@ class EditorActivity : Activity() {
             mainSpeedSeek.progress = 20
             blurSigma = 0f
             mainClipSpeed = 1f
-            player?.setPlaybackSpeed(1f)
+            activePreviewPlayer()?.setPlaybackSpeed(1f)
             updateColorValues()
             speedSummary.text = "Main clip speed · 1x"
             speedSummary.setTextColor(muted)
@@ -912,7 +918,7 @@ class EditorActivity : Activity() {
             selectedCubeLut = null
             selectedCubeLutUri = null
             refreshCubeLutSummary()
-            player?.setVideoEffects(buildVideoEffects())
+            refreshPreviewEffects()
             status.text = "CC LUT removed."
             status.setTextColor(muted)
         }, top = 8)
@@ -959,7 +965,7 @@ class EditorActivity : Activity() {
         add(textPanel, button("Remove text overlay", secondary = true) {
             overlayText = ""
             refreshTextOverlay()
-            player?.setVideoEffects(buildVideoEffects())
+            refreshPreviewEffects()
         }, top = 8)
         refreshTextOverlay()
         add(content, textPanel, bottom = 13)
@@ -991,6 +997,12 @@ class EditorActivity : Activity() {
     private fun pickVideo() {
         restoreStartMs = null
         restoreEndMs = null
+        pendingTimelineProject = null
+        timelineProject = null
+        selectedTimelineLayerId = null
+        compositionPlayheadMs = 0L
+        compositionPlayer?.release()
+        compositionPlayer = null
         additionalClipUris.clear()
         additionalClipTrims.clear()
         additionalClipSpeeds.clear()
@@ -1412,6 +1424,7 @@ class EditorActivity : Activity() {
             REQUEST_IMPORT_FFX -> loadFfxPreset(data?.data ?: return, data.flags)
             REQUEST_IMPORT_AUDIO -> loadBackgroundAudio(data?.data ?: return, data.flags)
             REQUEST_IMPORT_AEP -> loadAepProject(data?.data ?: return, data.flags)
+            REQUEST_ADD_VIDEO_LAYER -> addVideoLayer(data?.data ?: return, data.flags)
         }
     }
 
@@ -1435,8 +1448,10 @@ class EditorActivity : Activity() {
             }
         }
         backgroundAudioUri = uri
+        addAudioLayerToTimeline(uri)
         refreshBackgroundAudioControls()
-        status.text = "Background audio selected. It will be mixed during MP4 export; the live viewer still previews the video track only."
+        refreshCompositionPreview()
+        status.text = "Background audio added · composition preview and export updated."
         status.setTextColor(green)
         toast("Background audio added to the export composition.")
     }
@@ -2037,6 +2052,7 @@ class EditorActivity : Activity() {
                 .put("shakeAmplitudePixels", shakeAmplitudePixels.toDouble())
                 .put("shakeFrequencyHz", shakeFrequencyHz.toDouble())
                 .put("shakeRotationDegrees", shakeRotationDegrees.toDouble())
+                .put("timelineProject", timelineProject?.let { TimelineProjectStore.encode(it) })
                 .put("frameRate", 30)
                 .put("createdWith", "SOWZ AE Studio 1.3.0")
                 .toString(2)
@@ -2056,7 +2072,7 @@ class EditorActivity : Activity() {
         try {
             val bytes = contentResolver.openInputStream(projectUri)?.use { input ->
                 val result = input.readBytes()
-                if (result.size > 1_048_576) error("Project file exceeds the 1 MB safety limit.")
+                if (result.size > 20 * 1024 * 1024) error("Project file exceeds the 20 MB safety limit.")
                 result
             } ?: error("Could not read the selected project.")
             val document = org.json.JSONObject(String(bytes, Charsets.UTF_8))
@@ -2068,6 +2084,9 @@ class EditorActivity : Activity() {
             }
             val sourceString = document.optString("sourceUri")
             if (sourceString.isBlank()) error("The project has no source media reference.")
+            val timelineJson = document.optString("timelineProject")
+            pendingTimelineProject = timelineJson.takeIf { it.isNotBlank() && it != "null" }
+                ?.let { TimelineProjectStore.decode(it) }
             additionalClipUris.clear()
             additionalClipTrims.clear()
             additionalClipSpeeds.clear()
@@ -2216,7 +2235,9 @@ class EditorActivity : Activity() {
                             outPoint.progress = SCALE_MAX
                         }
                         updateTrimUi()
+                        initialiseTimelineProject(uri, value)
                         playbackTime.text = "${formatTime(0L)} / ${formatTime(value)}"
+                        refreshCompositionPreview()
                         status.text = "Video ready · ${formatTime(value)} total"
                         status.setTextColor(green)
                         exportButton.isEnabled = true
@@ -2269,8 +2290,9 @@ class EditorActivity : Activity() {
         timelineOverview.durationMs = durationMs
         timelineOverview.inMs = clipStartMs
         timelineOverview.outMs = clipEndMs
-        timelineOverview.playheadMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        timelineOverview.playheadMs = activePreviewPlayer()?.currentPosition?.coerceAtLeast(0L) ?: 0L
         timelineOverview.hasAudioTrack = backgroundAudioUri != null
+        refreshCompositionTimeline()
     }
 
     private fun updateColorValues() {
@@ -2282,7 +2304,7 @@ class EditorActivity : Activity() {
             lightnessAdjustment = (lightnessSeek.progress - 100).toFloat()
         )
         effectSummary.text = buildEffectSummary()
-        player?.setVideoEffects(buildVideoEffects())
+        refreshPreviewEffects()
     }
 
     private fun refreshShakeControls() {
@@ -2307,7 +2329,7 @@ class EditorActivity : Activity() {
         if (::lightnessSeek.isInitialized) lightnessSeek.progress = (colorGrade.lightnessAdjustment + 100f).toInt().coerceIn(0, 200)
         if (::blurSeek.isInitialized) blurSeek.progress = (blurSigma / 40f * 100f).toInt().coerceIn(0, 100)
         if (::effectSummary.isInitialized) updateColorValues()
-        player?.setVideoEffects(buildVideoEffects())
+        refreshPreviewEffects()
 
         val applied = stack.appliedEffects.joinToString(", ").ifBlank { "none" }
         val skipped = stack.skippedEffects.take(8).joinToString(", ").ifBlank { "none" }
@@ -2368,7 +2390,7 @@ class EditorActivity : Activity() {
         mainClipSpeed = (kotlin.math.round(mainClipSpeed * 100f) / 100f).coerceIn(0.25f, 4f)
         speedSummary.text = "Main clip speed · " + formatSpeed(mainClipSpeed)
         speedSummary.setTextColor(if (kotlin.math.abs(mainClipSpeed - 1f) < 0.001f) muted else accent)
-        player?.setPlaybackSpeed(mainClipSpeed)
+        activePreviewPlayer()?.setPlaybackSpeed(mainClipSpeed)
     }
 
     private fun formatSpeed(speed: Float): String =
@@ -2514,7 +2536,7 @@ class EditorActivity : Activity() {
                     selectedCubeLut = result
                     selectedCubeLutUri = uri
                     refreshCubeLutSummary()
-                    player?.setVideoEffects(buildVideoEffects())
+                    refreshPreviewEffects()
                     status.text = "CC LUT applied: ${result.title} · ${result.size}³"
                     status.setTextColor(green)
                     toast("CC LUT loaded and applied to preview/export.")
@@ -2673,7 +2695,7 @@ class EditorActivity : Activity() {
             .setPositiveButton("Apply") { _, _ ->
                 overlayText = input.text?.toString()?.trim()?.replace("\n", " ")?.take(120).orEmpty()
                 refreshTextOverlay()
-                player?.setVideoEffects(buildVideoEffects())
+                refreshPreviewEffects()
                 status.text = if (overlayText.isBlank()) "Text overlay cleared." else "Text overlay updated."
                 status.setTextColor(if (overlayText.isBlank()) muted else green)
             }
@@ -2690,7 +2712,7 @@ class EditorActivity : Activity() {
     private fun setRotation(degrees: Int) {
         rotationDegrees = if (degrees in setOf(0, 90, 180, 270)) degrees else 0
         refreshRotationControls()
-        player?.setVideoEffects(buildVideoEffects())
+        refreshPreviewEffects()
     }
 
     private fun refreshRotationControls() {
