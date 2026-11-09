@@ -80,6 +80,19 @@ fn main() -> eframe::Result {
             let mut session = effectcraft_host::session();
             session.check_footage_on_open = true;
             session.autosave.background = true;
+            if let Some(config_dir) = effectcraft_host::config_dir() {
+                let plugin_dir = config_dir.join(effectcraft_engine::commands::PLUGINS_DIR);
+                if plugin_dir.is_dir() {
+                    let _ = session.execute(
+                        "effect.plugins.load",
+                        serde_json::json!({"folder": plugin_dir.to_string_lossy()}),
+                    );
+                    let _ = session.execute("library.loadInstalled", serde_json::json!({}));
+                }
+                session.config = Some(std::sync::Arc::new(
+                    effectcraft_engine::config::DirConfig::new(config_dir),
+                ));
+            }
             session.load_settings();
 
             let mut app = EffectcraftApp::new(session);
